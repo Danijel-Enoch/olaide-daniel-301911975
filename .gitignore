@@ -1,0 +1,26 @@
+# MIT 8103 Advanced Database Systems portfolio - Olaide Daniel (301911975)
+
+# transient container/runtime artefacts
+*.pid
+*.log
+!**/evidence/*.log
+pgdata/
+data/
+
+# local scratch
+scratch/
+tmp/
+*.tmp
+*.swp
+
+# macOS
+.DS_Store
+._*
+
+# generated extracts: these are rebuilt by the ETL scripts and are large.
+# The commands that produce them are committed; the bytes are not.
+*.jsonl
+
+# editor/IDE
+.idea/
+.vscode/
