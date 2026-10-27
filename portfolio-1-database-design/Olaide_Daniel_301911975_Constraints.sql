@@ -22,7 +22,10 @@ ALTER TABLE customer
 ALTER TABLE account
     ADD CONSTRAINT chk_account_number_numeric CHECK (account_number ~ '^[0-9]{10}$'),
     ADD CONSTRAINT chk_account_status         CHECK (status IN ('ACTIVE','DORMANT','FROZEN','CLOSED')),
-    ADD CONSTRAINT chk_account_balance_sign   CHECK (balance >= 0),
+    -- customer money can never be overdrawn in this product set; the
+    -- internal branch till is a bank-side control account and legitimately
+    -- holds a negative (net cash paid out) position, so it is exempted.
+    ADD CONSTRAINT chk_account_balance_sign   CHECK (balance >= 0 OR product_code = 'TILL'),
     ADD CONSTRAINT chk_account_closed_after   CHECK (closed_at IS NULL OR closed_at >= opened_at),
     ADD CONSTRAINT chk_account_closed_state   CHECK ((status = 'CLOSED') = (closed_at IS NOT NULL));
 
