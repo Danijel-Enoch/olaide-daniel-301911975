@@ -1,0 +1,41 @@
+SET
+--- T1 duplicate BVN must be rejected (UNIQUE) ---
+BEGIN
+psql:/tmp/run.sql:14: ERROR:  duplicate key value violates unique constraint "customer_bvn_key"
+DETAIL:  Key (bvn)=(22000000001) already exists.
+ROLLBACK
+--- T2 negative transaction amount must be rejected (CHECK) ---
+BEGIN
+psql:/tmp/run.sql:20: ERROR:  new row for relation "txn" violates check constraint "chk_txn_amount_positive"
+DETAIL:  Failing row contains (274801, HDMB-NEG-TEST-1, TRANSFER, USSD, -5000.00, NGN, SUCCESS, null, 13, null, 2026-11-05 21:43:00.648822+00, 2026-11-05 21:43:00.648822+00).
+ROLLBACK
+--- T3 transaction with both initiators must be rejected (CHECK) ---
+BEGIN
+psql:/tmp/run.sql:26: ERROR:  new row for relation "txn" violates check constraint "chk_txn_single_initiator"
+DETAIL:  Failing row contains (274802, HDMB-BOTH-TEST-1, TRANSFER, BRANCH, 5000.00, NGN, SUCCESS, null, 13, 2, 2026-11-05 21:43:00.649465+00, 2026-11-05 21:43:00.649465+00).
+ROLLBACK
+--- T4 unknown channel must be rejected (FOREIGN KEY) ---
+BEGIN
+psql:/tmp/run.sql:32: ERROR:  insert or update on table "txn" violates foreign key constraint "txn_channel_code_fkey"
+DETAIL:  Key (channel_code)=(TELEPATHY) is not present in table "channel".
+ROLLBACK
+--- T5 single-sided (unbalanced) posting must be rejected at COMMIT ---
+BEGIN
+INSERT 0 1
+INSERT 0 1
+psql:/tmp/run.sql:41: ERROR:  unbalanced transaction 274804: debits 7500.00, credits 0.00
+CONTEXT:  PL/pgSQL function assert_txn_balanced() line 13 at RAISE
+--- T6 the same posting with both legs must succeed ---
+BEGIN
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+COMMIT
+--- T7 second ACTIVE account on the same product must be rejected ---
+BEGIN
+psql:/tmp/run.sql:58: ERROR:  duplicate key value violates unique constraint "uq_active_account_per_product"
+DETAIL:  Key (customer_id, product_code)=(13, SAV-BASIC) already exists.
+ROLLBACK
+--- cleanup ---
+DELETE 2
+DELETE 1
