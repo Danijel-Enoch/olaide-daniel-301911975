@@ -1,0 +1,11 @@
+query,best_execution_ms,planning_ms,scan_method
+Q01_Customer_Search,0.915,1.135,Bitmap Heap Scan+Index Scan+Seq Scan
+Q02_Mini_Statement,0.323,1.102,Index Only Scan+Index Scan
+Q03_Channel_Failure_Rate,13.818,0.974,Index Only Scan+Seq Scan
+Q04_Top_Outflow_Accounts,24.117,1.475,Index Only Scan+Seq Scan
+Q05_Dormancy_Sweep,40.258,1.580,Index Only Scan+Seq Scan
+Q06_Branch_Monthly_Volume,347.755,1.975,Parallel Seq Scan+Seq Scan
+Q07_Loan_Arrears,2.339,1.834,Index Only Scan+Index Scan+Seq Scan
+Q08_Balance_As_At,0.168,1.239,Index Only Scan+Index Scan
+Q09_Beneficiary_Reverse_Lookup,0.100,1.041,Index Scan
+Q10_Idempotency_Check,0.058,0.478,Index Scan

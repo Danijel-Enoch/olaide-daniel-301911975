@@ -1,0 +1,378 @@
+MIT 8103 Portfolio 2 - query plans (optimised)
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 22:56:42 WAT
+Engine  : PostgreSQL 18.6 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+Method  : EXPLAIN (ANALYZE, BUFFERS), best of 3 runs
+
+=====================================================================
+Q01_Customer_Search
+=====================================================================
+-- Q1  Operations searches for a customer by surname, case-insensitively.
+--     Typed into the support console dozens of times an hour.
+--     Optimisation target: expression index on lower(last_name).
+
+--- fastest of 3 runs ---
+Limit  (cost=464.61..464.74 rows=50 width=40) (actual time=0.839..0.844 rows=50.00 loops=1)
+  Buffers: shared hit=88
+  ->  Sort  (cost=464.61..467.11 rows=1001 width=40) (actual time=0.838..0.840 rows=50.00 loops=1)
+        Sort Key: c.last_name, c.first_name
+        Sort Method: top-N heapsort  Memory: 30kB
+        Buffers: shared hit=88
+        ->  Hash Join  (cost=15.81..431.36 rows=1001 width=40) (actual time=0.068..0.618 rows=1000.00 loops=1)
+              Hash Cond: (c.home_branch_id = b.branch_id)
+              Buffers: shared hit=85
+              ->  Bitmap Heap Scan on customer c  (cost=14.54..426.54 rows=1001 width=43) (actual time=0.046..0.472 rows=1000.00 loops=1)
+                    Filter: (lower((last_name)::text) ~~ 'okonkwo%'::text)
+                    Heap Blocks: exact=81
+                    Buffers: shared hit=84
+                    ->  Bitmap Index Scan on idx_customer_lastname_lower  (cost=0.00..14.29 rows=1000 width=0) (actual time=0.025..0.025 rows=1000.00 loops=1)
+                          Index Cond: ((lower((last_name)::text) ~>=~ 'okonkwo'::text) AND (lower((last_name)::text) ~<~ 'okonkwp'::text))
+                          Index Searches: 1
+                          Buffers: shared hit=3
+              ->  Hash  (cost=1.12..1.12 rows=12 width=13) (actual time=0.013..0.013 rows=12.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                    Buffers: shared hit=1
+                    ->  Seq Scan on branch b  (cost=0.00..1.12 rows=12 width=13) (actual time=0.007..0.008 rows=12.00 loops=1)
+                          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=363
+Planning Time: 1.135 ms
+Execution Time: 0.915 ms
+
+=====================================================================
+Q02_Mini_Statement
+=====================================================================
+-- Q2  Mini statement: the 20 most recent postings on one account.
+--     The single most frequent read in the mobile app.
+--     Optimisation target: composite index (account_id, entry_ts DESC).
+
+--- fastest of 3 runs ---
+Limit  (cost=0.85..176.31 rows=20 width=88) (actual time=0.072..0.253 rows=20.00 loops=1)
+  Buffers: shared hit=87
+  ->  Nested Loop  (cost=0.85..211.41 rows=24 width=88) (actual time=0.071..0.250 rows=20.00 loops=1)
+        Buffers: shared hit=87
+        ->  Index Only Scan using idx_ledger_account_ts on ledger_entry le  (cost=0.42..8.85 rows=24 width=39) (actual time=0.051..0.052 rows=20.00 loops=1)
+              Index Cond: (account_id = 4211)
+              Heap Fetches: 0
+              Index Searches: 1
+              Buffers: shared hit=7
+        ->  Index Scan using txn_pkey on txn t  (cost=0.42..8.44 rows=1 width=65) (actual time=0.010..0.010 rows=1.00 loops=20)
+              Index Cond: (txn_id = le.txn_id)
+              Index Searches: 20
+              Buffers: shared hit=80
+Planning:
+  Buffers: shared hit=319
+Planning Time: 1.102 ms
+Execution Time: 0.323 ms
+
+=====================================================================
+Q03_Channel_Failure_Rate
+=====================================================================
+-- Q3  Daily operations dashboard: failure rate by channel over 90 days.
+--     Optimisation target: index on txn(created_at) to cut the scan to the
+--     recent window instead of reading all 274,795 rows.
+
+--- fastest of 3 runs ---
+Sort  (cost=2874.04..2874.05 rows=6 width=108) (actual time=13.745..13.747 rows=6.00 loops=1)
+  Sort Key: (round(((100.0 * (count(*) FILTER (WHERE ((t.status)::text = 'FAILED'::text)))::numeric) / (count(*))::numeric), 2)) DESC
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=269
+  ->  HashAggregate  (cost=2873.79..2873.96 rows=6 width=108) (actual time=13.719..13.725 rows=6.00 loops=1)
+        Group Key: ch.channel_code
+        Batches: 1  Memory Usage: 32kB
+        Buffers: shared hit=266
+        ->  Hash Join  (cost=1.56..2008.49 rows=43265 width=32) (actual time=0.047..7.211 rows=43356.00 loops=1)
+              Hash Cond: ((t.channel_code)::text = (ch.channel_code)::text)
+              Buffers: shared hit=266
+              ->  Index Only Scan using idx_txn_created_at_cover on txn t  (cost=0.43..1813.57 rows=43265 width=17) (actual time=0.027..2.633 rows=43356.00 loops=1)
+                    Index Cond: (created_at >= (now() - '90 days'::interval))
+                    Heap Fetches: 0
+                    Index Searches: 1
+                    Buffers: shared hit=265
+              ->  Hash  (cost=1.06..1.06 rows=6 width=20) (actual time=0.009..0.010 rows=6.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                    Buffers: shared hit=1
+                    ->  Seq Scan on channel ch  (cost=0.00..1.06 rows=6 width=20) (actual time=0.003..0.004 rows=6.00 loops=1)
+                          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=302
+Planning Time: 0.974 ms
+Execution Time: 13.818 ms
+
+=====================================================================
+Q04_Top_Outflow_Accounts
+=====================================================================
+-- Q4  AML / fraud watchlist: the 10 accounts with the largest debit outflow
+--     in the last 30 days.
+--     Optimisation target: (entry_ts, direction) range scan + aggregate.
+
+--- fastest of 3 runs ---
+Limit  (cost=3606.95..3606.97 rows=10 width=124) (actual time=23.689..23.693 rows=10.00 loops=1)
+  Buffers: shared hit=1108
+  ->  Sort  (cost=3606.95..3644.81 rows=15147 width=124) (actual time=23.687..23.689 rows=10.00 loops=1)
+        Sort Key: (sum(le.amount)) DESC
+        Sort Method: top-N heapsort  Memory: 27kB
+        Buffers: shared hit=1108
+        ->  HashAggregate  (cost=2976.68..3279.62 rows=15147 width=124) (actual time=19.031..22.457 rows=8661.00 loops=1)
+              Group Key: a.account_number, (((c.first_name)::text || ' '::text) || (c.last_name)::text)
+              Batches: 1  Memory Usage: 3857kB
+              Buffers: shared hit=1105
+              ->  Hash Join  (cost=2100.72..2825.21 rows=15147 width=57) (actual time=8.687..14.744 rows=12493.00 loops=1)
+                    Hash Cond: (a.customer_id = c.customer_id)
+                    Buffers: shared hit=1105
+                    ->  Hash Join  (cost=1253.45..1862.44 rows=15147 width=33) (actual time=4.957..8.319 rows=12493.00 loops=1)
+                          Hash Cond: (le.account_id = a.account_id)
+                          Buffers: shared hit=708
+                          ->  Index Only Scan using idx_ledger_debit_recent on ledger_entry le  (cost=0.43..569.62 rows=15154 width=13) (actual time=0.018..0.974 rows=14517.00 loops=1)
+                                Index Cond: (entry_ts >= (now() - '30 days'::interval))
+                                Heap Fetches: 0
+                                Index Searches: 1
+                                Buffers: shared hit=75
+                          ->  Hash  (cost=943.09..943.09 rows=24795 width=36) (actual time=4.846..4.847 rows=24795.00 loops=1)
+                                Buckets: 32768  Batches: 1  Memory Usage: 2000kB
+                                Buffers: shared hit=633
+                                ->  Seq Scan on account a  (cost=0.00..943.09 rows=24795 width=36) (actual time=0.357..2.563 rows=24795.00 loops=1)
+                                      Filter: ((product_code)::text <> 'TILL'::text)
+                                      Rows Removed by Filter: 12
+                                      Buffers: shared hit=633
+                    ->  Hash  (cost=597.12..597.12 rows=20012 width=21) (actual time=3.631..3.631 rows=20012.00 loops=1)
+                          Buckets: 32768  Batches: 1  Memory Usage: 1377kB
+                          Buffers: shared hit=397
+                          ->  Seq Scan on customer c  (cost=0.00..597.12 rows=20012 width=21) (actual time=0.007..1.855 rows=20012.00 loops=1)
+                                Buffers: shared hit=397
+Planning:
+  Buffers: shared hit=513
+Planning Time: 1.475 ms
+Execution Time: 24.117 ms
+
+=====================================================================
+Q05_Dormancy_Sweep
+=====================================================================
+-- Q5  Regulatory dormancy sweep: ACTIVE accounts with a positive balance and
+--     no posting in 180 days. An anti-join over the whole ledger.
+--     Optimisation target: let the (account_id, entry_ts) index answer the
+--     NOT EXISTS probe instead of hashing every entry.
+
+--- fastest of 3 runs ---
+Limit  (cost=16785.90..16785.96 rows=25 width=47) (actual time=40.057..40.069 rows=25.00 loops=1)
+  Buffers: shared hit=74160
+  ->  Sort  (cost=16785.90..16801.35 rows=6180 width=47) (actual time=40.055..40.066 rows=25.00 loops=1)
+        Sort Key: a.balance DESC
+        Sort Method: top-N heapsort  Memory: 31kB
+        Buffers: shared hit=74160
+        ->  Hash Join  (cost=848.97..16611.50 rows=6180 width=47) (actual time=3.875..39.185 rows=6046.00 loops=1)
+              Hash Cond: (c.home_branch_id = b.branch_id)
+              Buffers: shared hit=74157
+              ->  Hash Join  (cost=847.70..16572.83 rows=6180 width=54) (actual time=3.857..38.147 rows=6046.00 loops=1)
+                    Hash Cond: (a.customer_id = c.customer_id)
+                    Buffers: shared hit=74156
+                    ->  Nested Loop Anti Join  (cost=0.43..15709.34 rows=6180 width=42) (actual time=0.397..33.374 rows=6046.00 loops=1)
+                          Buffers: shared hit=73759
+                          ->  Seq Scan on account a  (cost=0.00..1067.12 rows=24192 width=50) (actual time=0.357..3.634 rows=24375.00 loops=1)
+                                Filter: (((product_code)::text <> 'TILL'::text) AND (balance > '0'::numeric) AND ((status)::text = 'ACTIVE'::text))
+                                Rows Removed by Filter: 432
+                                Buffers: shared hit=633
+                          ->  Index Only Scan using idx_ledger_account_ts on ledger_entry le  (cost=0.43..1.38 rows=9 width=8) (actual time=0.001..0.001 rows=0.75 loops=24375)
+                                Index Cond: ((account_id = a.account_id) AND (entry_ts >= (now() - '180 days'::interval)))
+                                Heap Fetches: 0
+                                Index Searches: 24375
+                                Buffers: shared hit=73126
+                    ->  Hash  (cost=597.12..597.12 rows=20012 width=28) (actual time=3.436..3.436 rows=20012.00 loops=1)
+                          Buckets: 32768  Batches: 1  Memory Usage: 1507kB
+                          Buffers: shared hit=397
+                          ->  Seq Scan on customer c  (cost=0.00..597.12 rows=20012 width=28) (actual time=0.005..1.741 rows=20012.00 loops=1)
+                                Buffers: shared hit=397
+              ->  Hash  (cost=1.12..1.12 rows=12 width=13) (actual time=0.009..0.018 rows=12.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                    Buffers: shared hit=1
+                    ->  Seq Scan on branch b  (cost=0.00..1.12 rows=12 width=13) (actual time=0.004..0.004 rows=12.00 loops=1)
+                          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=533
+Planning Time: 1.580 ms
+Execution Time: 40.258 ms
+
+=====================================================================
+Q06_Branch_Monthly_Volume
+=====================================================================
+-- Q6  Head-office report: transaction value per branch per month, 12 months.
+--     Joins the two largest relations to reference data and aggregates.
+--     Optimisation target: covering index so the ledger join is index-only.
+
+--- fastest of 3 runs ---
+GroupAggregate  (cost=44168.68..90457.85 rows=66444 width=59) (actual time=253.880..347.087 rows=159.00 loops=1)
+  Group Key: b.branch_code, ((date_trunc('month'::text, le.entry_ts))::date)
+  Buffers: shared hit=13447 read=5081, temp read=1882 written=1885
+  ->  Gather Merge  (cost=44168.68..84771.22 rows=348620 width=35) (actual time=253.405..317.148 rows=291071.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=13447 read=5081, temp read=1882 written=1885
+        ->  Sort  (cost=43168.65..43531.80 rows=145258 width=35) (actual time=249.288..260.712 rows=97023.67 loops=3)
+              Sort Key: b.branch_code, ((date_trunc('month'::text, le.entry_ts))::date), t.txn_id
+              Sort Method: external merge  Disk: 4824kB
+              Buffers: shared hit=13447 read=5081, temp read=1882 written=1885
+              Worker 0:  Sort Method: external merge  Disk: 5120kB
+              Worker 1:  Sort Method: external merge  Disk: 5112kB
+              ->  Hash Join  (cost=9953.38..26741.54 rows=145258 width=35) (actual time=37.081..149.467 rows=97023.67 loops=3)
+                    Hash Cond: (c.home_branch_id = b.branch_id)
+                    Buffers: shared hit=13401 read=5081
+                    ->  Hash Join  (cost=9952.11..25498.01 rows=145258 width=32) (actual time=37.057..127.705 rows=97023.67 loops=3)
+                          Hash Cond: (a.customer_id = c.customer_id)
+                          Buffers: shared hit=13398 read=5081
+                          ->  Hash Join  (cost=9104.84..24269.36 rows=145258 width=32) (actual time=34.156..110.825 rows=97023.67 loops=3)
+                                Hash Cond: (le.account_id = a.account_id)
+                                Buffers: shared hit=12207 read=5081
+                                ->  Parallel Hash Join  (cost=7851.81..22634.78 rows=145329 width=32) (actual time=28.520..91.477 rows=116293.33 loops=3)
+                                      Hash Cond: (le.txn_id = t.txn_id)
+                                      Buffers: shared hit=10308 read=5081
+                                      ->  Parallel Seq Scan on ledger_entry le  (cost=0.00..14399.43 rows=146108 width=32) (actual time=8.709..34.848 rows=117048.00 loops=3)
+                                            Filter: (entry_ts >= (now() - '1 year'::interval))
+                                            Rows Removed by Filter: 66149
+                                            Buffers: shared hit=7154 read=3238
+                                      ->  Parallel Hash  (cost=6428.22..6428.22 rows=113887 width=8) (actual time=19.317..19.317 rows=91038.67 loops=3)
+                                            Buckets: 524288  Batches: 1  Memory Usage: 14848kB
+                                            Buffers: shared hit=3154 read=1843
+                                            ->  Parallel Seq Scan on txn t  (cost=0.00..6428.22 rows=113887 width=8) (actual time=0.167..10.170 rows=91038.67 loops=3)
+                                                  Filter: ((status)::text = 'SUCCESS'::text)
+                                                  Rows Removed by Filter: 560
+                                                  Buffers: shared hit=3154 read=1843
+                                ->  Hash  (cost=943.09..943.09 rows=24795 width=16) (actual time=3.658..3.658 rows=24795.00 loops=3)
+                                      Buckets: 32768  Batches: 1  Memory Usage: 1419kB
+                                      Buffers: shared hit=1899
+                                      ->  Seq Scan on account a  (cost=0.00..943.09 rows=24795 width=16) (actual time=0.229..2.013 rows=24795.00 loops=3)
+                                            Filter: ((product_code)::text <> 'TILL'::text)
+                                            Rows Removed by Filter: 12
+                                            Buffers: shared hit=1899
+                          ->  Hash  (cost=597.12..597.12 rows=20012 width=16) (actual time=2.869..2.870 rows=20012.00 loops=3)
+                                Buckets: 32768  Batches: 1  Memory Usage: 1195kB
+                                Buffers: shared hit=1191
+                                ->  Seq Scan on customer c  (cost=0.00..597.12 rows=20012 width=16) (actual time=0.005..1.482 rows=20012.00 loops=3)
+                                      Buffers: shared hit=1191
+                    ->  Hash  (cost=1.12..1.12 rows=12 width=23) (actual time=0.013..0.013 rows=12.00 loops=3)
+                          Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                          Buffers: shared hit=3
+                          ->  Seq Scan on branch b  (cost=0.00..1.12 rows=12 width=23) (actual time=0.007..0.008 rows=12.00 loops=3)
+                                Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=534
+Planning Time: 1.975 ms
+Execution Time: 347.755 ms
+
+=====================================================================
+Q07_Loan_Arrears
+=====================================================================
+-- Q7  Credit control: active loans already past their due date.
+--     Only ~2,700 loans exist, of which a minority are ACTIVE.
+--     Optimisation target: partial index WHERE status = 'ACTIVE'.
+
+--- fastest of 3 runs ---
+Limit  (cost=726.28..726.40 rows=50 width=89) (actual time=2.275..2.280 rows=50.00 loops=1)
+  Buffers: shared hit=419 read=4
+  ->  Sort  (cost=726.28..726.71 rows=175 width=89) (actual time=2.275..2.277 rows=50.00 loops=1)
+        Sort Key: ((CURRENT_DATE - l.due_on)) DESC, l.principal DESC
+        Sort Method: top-N heapsort  Memory: 36kB
+        Buffers: shared hit=419 read=4
+        ->  Nested Loop Left Join  (cost=13.68..720.46 rows=175 width=89) (actual time=0.223..2.197 rows=185.00 loops=1)
+              Buffers: shared hit=413 read=4
+              ->  Hash Join  (cost=13.53..712.46 rows=175 width=60) (actual time=0.211..2.125 rows=185.00 loops=1)
+                    Hash Cond: (c.customer_id = l.customer_id)
+                    Buffers: shared hit=397 read=4
+                    ->  Seq Scan on customer c  (cost=0.00..597.12 rows=20012 width=33) (actual time=0.004..0.817 rows=20012.00 loops=1)
+                          Buffers: shared hit=397
+                    ->  Hash  (cost=11.34..11.34 rows=175 width=43) (actual time=0.164..0.164 rows=185.00 loops=1)
+                          Buckets: 1024  Batches: 1  Memory Usage: 23kB
+                          Buffers: shared read=4
+                          ->  Index Only Scan using idx_loan_active_due on loan l  (cost=0.28..11.34 rows=175 width=43) (actual time=0.102..0.131 rows=185.00 loops=1)
+                                Index Cond: (due_on < CURRENT_DATE)
+                                Heap Fetches: 0
+                                Index Searches: 1
+                                Buffers: shared read=4
+              ->  Memoize  (cost=0.15..0.23 rows=1 width=22) (actual time=0.000..0.000 rows=1.00 loops=185)
+                    Cache Key: l.approved_by
+                    Cache Mode: logical
+                    Hits: 177  Misses: 8  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                    Buffers: shared hit=16
+                    ->  Index Scan using staff_pkey on staff s  (cost=0.14..0.22 rows=1 width=22) (actual time=0.001..0.001 rows=1.00 loops=8)
+                          Index Cond: (staff_id = l.approved_by)
+                          Index Searches: 8
+                          Buffers: shared hit=16
+Planning:
+  Buffers: shared hit=440 read=8 dirtied=1
+Planning Time: 1.834 ms
+Execution Time: 2.339 ms
+
+=====================================================================
+Q08_Balance_As_At
+=====================================================================
+-- Q8  Dispute resolution: what was this account's balance at a past instant?
+--     Derived from the journal rather than from account.balance, which only
+--     holds the position now.
+--     Optimisation target: (account_id, entry_ts) index range scan.
+
+--- fastest of 3 runs ---
+HashAggregate  (cost=17.58..17.60 rows=1 width=89) (actual time=0.097..0.097 rows=1.00 loops=1)
+  Group Key: a.account_number
+  Batches: 1  Memory Usage: 32kB
+  Buffers: shared hit=10
+  ->  Nested Loop Left Join  (cost=0.72..17.33 rows=20 width=33) (actual time=0.070..0.074 rows=22.00 loops=1)
+        Buffers: shared hit=10
+        ->  Index Scan using account_pkey on account a  (cost=0.29..8.30 rows=1 width=25) (actual time=0.024..0.025 rows=1.00 loops=1)
+              Index Cond: (account_id = 4211)
+              Index Searches: 1
+              Buffers: shared hit=6
+        ->  Index Only Scan using idx_ledger_account_ts on ledger_entry le  (cost=0.43..8.83 rows=20 width=24) (actual time=0.042..0.044 rows=22.00 loops=1)
+              Index Cond: ((account_id = 4211) AND (entry_ts <= (now() - '90 days'::interval)))
+              Heap Fetches: 0
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=429
+Planning Time: 1.239 ms
+Execution Time: 0.168 ms
+
+=====================================================================
+Q09_Beneficiary_Reverse_Lookup
+=====================================================================
+-- Q9  Fraud investigation: which customers have saved this external account
+--     as a beneficiary? Searches a non-leading column of a composite unique
+--     constraint, so that constraint's index cannot help.
+--     Optimisation target: dedicated index on beneficiary(account_number).
+
+--- fastest of 3 runs ---
+Sort  (cost=16.62..16.63 rows=1 width=85) (actual time=0.053..0.053 rows=1.00 loops=1)
+  Sort Key: bn.created_at
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=9
+  ->  Nested Loop  (cost=0.57..16.61 rows=1 width=85) (actual time=0.034..0.034 rows=1.00 loops=1)
+        Buffers: shared hit=6
+        ->  Index Scan using idx_beneficiary_account_number on beneficiary bn  (cost=0.28..8.30 rows=1 width=37) (actual time=0.018..0.018 rows=1.00 loops=1)
+              Index Cond: (account_number = '0000118785'::bpchar)
+              Index Searches: 1
+              Buffers: shared hit=3
+        ->  Index Scan using customer_pkey on customer c  (cost=0.29..8.30 rows=1 width=33) (actual time=0.006..0.006 rows=1.00 loops=1)
+              Index Cond: (customer_id = bn.customer_id)
+              Index Searches: 1
+              Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=347
+Planning Time: 1.041 ms
+Execution Time: 0.100 ms
+
+=====================================================================
+Q10_Idempotency_Check
+=====================================================================
+-- Q10 Channel retry: before posting, the switch asks whether this reference
+--      has already been processed. Must be O(log n) from day one - the unique
+--      constraint on txn_ref already provides the index, and this query is
+--      included to show what "already optimal" looks like in a plan.
+
+--- fastest of 3 runs ---
+Index Scan using txn_txn_ref_key on txn t  (cost=0.42..8.44 rows=1 width=28) (actual time=0.026..0.027 rows=1.00 loops=1)
+  Index Cond: ((txn_ref)::text = 'HDMB-20261025-000119351'::text)
+  Index Searches: 1
+  Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=119
+Planning Time: 0.478 ms
+Execution Time: 0.058 ms
+
