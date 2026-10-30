@@ -1,0 +1,50 @@
+psql:/tmp/run.sql:14: NOTICE:  materialized view "mv_branch_monthly_volume" does not exist, skipping
+DROP MATERIALIZED VIEW
+SELECT 567
+CREATE INDEX
+ANALYZE
+--- materialised view size and row count ---
+ rows |  size  
+------+--------
+  567 | 120 kB
+(1 row)
+
+--- refresh cost (this is the price paid for the read speed) ---
+Timing is on.
+REFRESH MATERIALIZED VIEW
+Time: 479.957 ms
+Timing is off.
+--- the report, now served from the view ---
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=26.97..27.37 rows=159 width=59) (actual time=0.213..0.218 rows=159.00 loops=1)
+   Sort Key: branch_code, month
+   Sort Method: quicksort  Memory: 34kB
+   Buffers: shared hit=8
+   ->  Seq Scan on mv_branch_monthly_volume  (cost=0.00..21.16 rows=159 width=59) (actual time=0.030..0.180 rows=159.00 loops=1)
+         Filter: (month >= (date_trunc('month'::text, (now() - '1 year'::interval)))::date)
+         Rows Removed by Filter: 408
+         Buffers: shared hit=8
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.069 ms
+ Execution Time: 0.234 ms
+(12 rows)
+
+--- sample of the output rows ---
+ branch_code |   month    | transactions |   credited    
+-------------+------------+--------------+---------------
+ HD01        | 2026-12-01 |            5 | 4,700,000.00
+ HD01        | 2026-11-01 |          345 | 46,248,800.00
+ HD01        | 2026-10-01 |         1911 | 79,227,200.00
+ HD01        | 2026-09-01 |         1911 | 80,547,050.00
+ HD01        | 2026-08-01 |         1910 | 82,493,400.00
+ HD01        | 2026-07-01 |         2189 | 68,788,550.00
+ HD01        | 2026-06-01 |         1614 | 73,148,200.00
+ HD01        | 2026-05-01 |         2217 | 82,527,050.00
+ HD01        | 2026-04-01 |         1757 | 79,746,950.00
+ HD01        | 2026-03-01 |         2062 | 81,135,300.00
+ HD01        | 2026-02-01 |         1588 | 65,405,150.00
+ HD01        | 2026-01-01 |         2210 | 75,182,250.00
+(12 rows)
+
