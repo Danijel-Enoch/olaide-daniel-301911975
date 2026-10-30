@@ -10,6 +10,15 @@
 -- added one per demonstrated need, not speculatively.
 -- =====================================================================
 
+-- Re-runnable: drop first, so this script can be applied repeatedly while
+-- comparing plans.
+DROP INDEX IF EXISTS idx_customer_lastname_lower;
+DROP INDEX IF EXISTS idx_ledger_account_ts;
+DROP INDEX IF EXISTS idx_ledger_debit_recent;
+DROP INDEX IF EXISTS idx_loan_active_due;
+DROP INDEX IF EXISTS idx_beneficiary_account_number;
+DROP INDEX IF EXISTS idx_txn_created_at_cover;
+
 -- ---------------------------------------------------------------------
 -- I1 -> Q1  Case-insensitive surname search
 -- Why the existing indexes fail: there is no index on last_name at all, and
