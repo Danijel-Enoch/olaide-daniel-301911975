@@ -1,0 +1,80 @@
+Pager usage is off.
+############ R1: NOT EXISTS (correlated anti-join) ############
+                                                                          QUERY PLAN                                                                           
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=15724.81..15724.82 rows=1 width=8) (actual time=68.595..68.596 rows=1.00 loops=1)
+   Buffers: shared hit=73759
+   ->  Nested Loop Anti Join  (cost=0.43..15709.36 rows=6180 width=0) (actual time=3.211..68.364 rows=6046.00 loops=1)
+         Buffers: shared hit=73759
+         ->  Seq Scan on account a  (cost=0.00..1067.12 rows=24192 width=8) (actual time=3.097..11.231 rows=24375.00 loops=1)
+               Filter: (((product_code)::text <> 'TILL'::text) AND (balance > '0'::numeric) AND ((status)::text = 'ACTIVE'::text))
+               Rows Removed by Filter: 432
+               Buffers: shared hit=633
+         ->  Index Only Scan using idx_ledger_account_ts on ledger_entry le  (cost=0.43..1.38 rows=9 width=8) (actual time=0.002..0.002 rows=0.75 loops=24375)
+               Index Cond: ((account_id = a.account_id) AND (entry_ts >= (now() - '180 days'::interval)))
+               Heap Fetches: 0
+               Index Searches: 24375
+               Buffers: shared hit=73126
+ Planning:
+   Buffers: shared hit=384
+ Planning Time: 3.220 ms
+ Execution Time: 68.745 ms
+(17 rows)
+
+############ R2: NOT IN (uncorrelated subquery) ############
+                                                                                     QUERY PLAN                                                                                     
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=21606.93..21606.94 rows=1 width=8) (actual time=540.778..540.779 rows=1.00 loops=1)
+   Buffers: shared hit=7967 read=3058
+   ->  Seq Scan on account a  (cost=20447.55..21576.69 rows=12096 width=0) (actual time=533.737..540.567 rows=6046.00 loops=1)
+         Filter: (((product_code)::text <> 'TILL'::text) AND (balance > '0'::numeric) AND (NOT (ANY (account_id = (hashed SubPlan 1).col1))) AND ((status)::text = 'ACTIVE'::text))
+         Rows Removed by Filter: 18761
+         Buffers: shared hit=7967 read=3058
+         SubPlan 1
+           ->  Seq Scan on ledger_entry le  (cost=0.00..20009.83 rows=175088 width=8) (actual time=270.842..486.541 rows=173134.00 loops=1)
+                 Filter: (entry_ts >= (now() - '180 days'::interval))
+                 Rows Removed by Filter: 376456
+                 Buffers: shared hit=7334 read=3058
+ Planning Time: 0.196 ms
+ Execution Time: 541.755 ms
+(13 rows)
+
+############ R3: LEFT JOIN ... IS NULL ############
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=22091.26..22091.27 rows=1 width=8) (actual time=99.443..99.446 rows=1.00 loops=1)
+   Buffers: shared hit=8061 read=2964
+   ->  Hash Anti Join  (cost=20863.12..22075.81 rows=6180 width=0) (actual time=94.606..99.256 rows=6046.00 loops=1)
+         Hash Cond: (a.account_id = ledger_entry.account_id)
+         Buffers: shared hit=8061 read=2964
+         ->  Seq Scan on account a  (cost=0.00..1067.12 rows=24192 width=8) (actual time=0.214..3.110 rows=24375.00 loops=1)
+               Filter: (((product_code)::text <> 'TILL'::text) AND (balance > '0'::numeric) AND ((status)::text = 'ACTIVE'::text))
+               Rows Removed by Filter: 432
+               Buffers: shared hit=633
+         ->  Hash  (cost=20632.25..20632.25 rows=18470 width=8) (actual time=94.345..94.345 rows=18740.00 loops=1)
+               Buckets: 32768  Batches: 1  Memory Usage: 989kB
+               Buffers: shared hit=7428 read=2964
+               ->  HashAggregate  (cost=20447.55..20632.25 rows=18470 width=8) (actual time=91.824..92.825 rows=18740.00 loops=1)
+                     Group Key: ledger_entry.account_id
+                     Batches: 1  Memory Usage: 1049kB
+                     Buffers: shared hit=7428 read=2964
+                     ->  Seq Scan on ledger_entry  (cost=0.00..20009.83 rows=175088 width=8) (actual time=6.119..75.021 rows=173134.00 loops=1)
+                           Filter: (entry_ts >= (now() - '180 days'::interval))
+                           Rows Removed by Filter: 376456
+                           Buffers: shared hit=7428 read=2964
+ Planning Time: 0.239 ms
+ Execution Time: 99.686 ms
+(22 rows)
+
+############ all three must agree on the answer ############
+ r1_not_exists | r2_not_in | r3_left_join 
+---------------+-----------+--------------
+          6046 |      6046 |         6046
+(1 row)
+
+############ the NOT IN NULL trap ############
+ rows_returned_when_subquery_contains_null 
+-------------------------------------------
+                                         0
+(1 row)
+
