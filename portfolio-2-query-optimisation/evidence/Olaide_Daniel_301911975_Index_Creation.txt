@@ -1,0 +1,51 @@
+DROP INDEX
+DROP INDEX
+DROP INDEX
+DROP INDEX
+DROP INDEX
+DROP INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+ANALYZE
+ANALYZE
+ANALYZE
+ANALYZE
+ANALYZE
+--- index inventory (size on disk) ---
+           index_name           |    size    
+--------------------------------+------------
+ uq_entry_txn_account_dir       | 42 MB
+ idx_ledger_account_ts          | 37 MB
+ ledger_entry_pkey              | 24 MB
+ txn_txn_ref_key                | 17 MB
+ idx_txn_created_at_cover       | 13 MB
+ idx_ledger_debit_recent        | 11 MB
+ txn_pkey                       | 6048 kB
+ account_account_number_key     | 1544 kB
+ uq_active_account_per_product  | 1544 kB
+ account_pkey                   | 1112 kB
+ customer_bvn_key               | 632 kB
+ customer_phone_key             | 632 kB
+ customer_pkey                  | 456 kB
+ uq_beneficiary_per_customer    | 280 kB
+ idx_beneficiary_account_number | 224 kB
+ idx_loan_active_due            | 176 kB
+ beneficiary_pkey               | 168 kB
+ idx_customer_lastname_lower    | 160 kB
+ loan_loan_ref_key              | 104 kB
+ loan_pkey                      | 80 kB
+ account_product_pkey           | 16 kB
+ branch_pkey                    | 16 kB
+ staff_staff_number_key         | 16 kB
+ staff_pkey                     | 16 kB
+ channel_pkey                   | 16 kB
+ branch_branch_code_key         | 16 kB
+ staff_work_email_key           | 16 kB
+ loan_repayment_pkey            | 8192 bytes
+ audit_log_pkey                 | 8192 bytes
+(29 rows)
+
