@@ -1,0 +1,118 @@
+==============================================================================
+D6 - DEADLOCK: how to cause one, how the server resolves it, how to prevent it
+==============================================================================
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:09:31 WAT
+
+WHAT THIS DEMONSTRATES
+  PART 1 creates a deadlock on purpose: A locks account 900001 then wants
+  900002; B locks 900002 then wants 900001. Session C inspects pg_locks
+  while both are stuck.
+  PART 2 runs the same two opposite-direction transfers through
+  fn_transfer_funds(), which always locks the lower account_id first.
+
+EXPECTED RESULT
+  PART 1 - the second waiter is aborted by the deadlock detector with
+  SQLSTATE 40P01 'deadlock detected'. The server breaks the cycle
+  itself after deadlock_timeout; it does not hang forever.
+  PART 2 - both transfers succeed. Ordered lock acquisition makes the
+  waits-for cycle impossible, so there is nothing to detect.
+
+TRANSCRIPT  (t = seconds from start of demo; >> = statement sent)
+------------------------------------------------------------------------------
+[t+00.000] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+00.083] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+00.083] [A] --------------+------------------+-----------+--------------
+[t+00.083] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+00.083] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+00.083] [A] (2 rows)
+[t+00.601] [A] hdmb=#
+[t+00.601] [--] ### =========== PART 1: deliberate deadlock (unordered locking) ===========
+[t+00.601] [A] >> BEGIN;
+[t+00.802] [A] hdmb=*#
+[t+00.802] [B] >> BEGIN;
+[t+01.005] [B] hdmb=*#
+[t+01.005] [A] >> SELECT account_id, balance FROM account WHERE account_id = 900001 FOR UPDATE;
+[t+01.010] [A]  account_id |  balance
+[t+01.010] [A] ------------+-----------
+[t+01.010] [A]      900001 | 100000.00
+[t+01.010] [A] (1 row)
+[t+01.509] [A] hdmb=*#
+[t+01.509] [B] >> SELECT account_id, balance FROM account WHERE account_id = 900002 FOR UPDATE;
+[t+01.513] [B]  account_id |  balance
+[t+01.513] [B] ------------+-----------
+[t+01.513] [B]      900002 | 100000.00
+[t+01.513] [B] (1 row)
+[t+02.013] [B] hdmb=*#
+[t+02.013] [--] ### each session now holds one lock and asks for the other - the cycle
+[t+02.013] [A] >> SELECT account_id, balance FROM account WHERE account_id = 900002 FOR UPDATE;
+[t+02.217] [B] >> SELECT account_id, balance FROM account WHERE account_id = 900001 FOR UPDATE;
+[t+02.370] [--] ### C inspects the wait graph NOW, inside the 1s deadlock_timeout window,
+[t+02.371] [--] ### before the detector has had a chance to break the cycle
+[t+02.371] [C] >> SELECT pid, state, wait_event_type, wait_event, left(query, 46) AS waiting_on FROM pg_stat_activity WHERE datname='hdmb' AND wait_event_type='Lock';
+[t+02.381] [C]  pid  | state  | wait_event_type |  wait_event   |                   waiting_on
+[t+02.381] [C] ------+--------+-----------------+---------------+------------------------------------------------
+[t+02.381] [C]  1008 | active | Lock            | transactionid | SELECT account_id, balance FROM account WHERE
+[t+02.381] [C]  1009 | active | Lock            | transactionid | SELECT account_id, balance FROM account WHERE
+[t+02.381] [C] (2 rows)
+[t+02.874] [C] hdmb=#
+[t+02.874] [--] ### deadlock_timeout elapses and the detector fires, aborting one victim
+[t+02.874] [--] ### (waiting below for the detector, which is why there is a pause here)
+[t+03.023] [A] ERROR:  deadlock detected
+[t+03.023] [A] DETAIL:  Process 1008 waits for ShareLock on transaction 1062; blocked by process 1009.
+[t+03.023] [A] Process 1009 waits for ShareLock on transaction 1061; blocked by process 1008.
+[t+03.023] [A] HINT:  See server log for query details.
+[t+03.023] [A] CONTEXT:  while locking tuple (2,22) in relation "account"
+[t+03.023] [B]  account_id |  balance
+[t+03.023] [B] ------------+-----------
+[t+03.023] [B]      900001 | 100000.00
+[t+03.023] [B] (1 row)
+[t+04.379] [A] hdmb=!#
+[t+04.379] [B] hdmb=*#
+[t+04.379] [A] >> SELECT 'A still alive' AS a_state;
+[t+04.382] [A] ERROR:  current transaction is aborted, commands ignored until end of transaction block
+[t+05.181] [A] hdmb=!#
+[t+05.181] [B] >> SELECT 'B still alive' AS b_state;
+[t+05.185] [B]     b_state
+[t+05.185] [B] ---------------
+[t+05.185] [B]  B still alive
+[t+05.185] [B] (1 row)
+[t+05.983] [B] hdmb=*#
+[t+05.983] [A] >> ROLLBACK;
+[t+06.289] [A] hdmb=#
+[t+06.289] [B] >> ROLLBACK;
+[t+06.790] [B] hdmb=#
+[t+06.790] [--] ### =========== PART 2: the same workload through ordered locking ===========
+[t+06.790] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+06.848] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+06.848] [A] --------------+------------------+-----------+--------------
+[t+06.848] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+06.848] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+06.848] [A] (2 rows)
+[t+07.595] [A] hdmb=#
+[t+07.596] [A] >> SELECT fn_transfer_funds(900001, 900002, 7000.00, 'DEMO-D6-ORDERED-A') AS a_txn;
+[t+07.611] [A]  a_txn
+[t+07.611] [A] --------
+[t+07.611] [A]  274852
+[t+07.611] [A] (1 row)
+[t+07.650] [A] hdmb=#
+[t+07.650] [B] >> SELECT fn_transfer_funds(900002, 900001, 4000.00, 'DEMO-D6-ORDERED-B') AS b_txn;
+[t+07.671] [B]  b_txn
+[t+07.671] [B] --------
+[t+07.671] [B]  274853
+[t+07.671] [B] (1 row)
+[t+09.154] [B] hdmb=#
+[t+09.154] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+09.159] [A]  account_id | account_number |  balance
+[t+09.159] [A] ------------+----------------+-----------
+[t+09.159] [A]      900001 | 9900000001     |  97000.00
+[t+09.159] [A]      900002 | 9900000002     | 103000.00
+[t+09.159] [A] (2 rows)
+[t+09.759] [A] hdmb=#
+[t+09.759] [A] >> SELECT count(*) AS both_transfers_committed FROM txn WHERE txn_ref LIKE 'DEMO-D6-ORDERED%';
+[t+09.791] [A]  both_transfers_committed
+[t+09.791] [A] --------------------------
+[t+09.791] [A]                         2
+[t+09.791] [A] (1 row)
+[t+10.361] [A] hdmb=#
+------------------------------------------------------------------------------
