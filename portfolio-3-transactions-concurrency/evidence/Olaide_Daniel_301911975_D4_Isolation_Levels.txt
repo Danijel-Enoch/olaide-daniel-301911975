@@ -1,0 +1,99 @@
+==============================================================================
+D4 - ISOLATION LEVELS: the same read, under READ COMMITTED and REPEATABLE READ
+==============================================================================
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:07:54 WAT
+
+WHAT THIS DEMONSTRATES
+  Session A reads a balance, session B transfers money and commits, then A
+  reads the same row again inside the same transaction.
+  PART 1 runs A at READ COMMITTED (PostgreSQL's default).
+  PART 2 runs A at REPEATABLE READ.
+  Nothing about the query changes - only the isolation level.
+
+EXPECTED RESULT
+  PART 1 (READ COMMITTED): A's second read returns a DIFFERENT value. This
+  is a non-repeatable read. Each statement takes a fresh snapshot,
+  so a report made of several queries can be internally inconsistent.
+  PART 2 (REPEATABLE READ): A's second read returns the SAME value it saw
+  first, even though B's commit is already durable. A's snapshot is
+  fixed at the start of the transaction.
+
+TRANSCRIPT  (t = seconds from start of demo; >> = statement sent)
+------------------------------------------------------------------------------
+[t+00.000] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+00.057] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+00.057] [A] --------------+------------------+-----------+--------------
+[t+00.057] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+00.057] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+00.057] [A] (2 rows)
+[t+00.605] [A] hdmb=#
+[t+00.605] [--] ### =========== PART 1: A at READ COMMITTED (the default) ===========
+[t+00.605] [A] >> BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+[t+00.909] [A] hdmb=*#
+[t+00.909] [A] >> SELECT current_setting('transaction_isolation') AS isolation_level;
+[t+00.912] [A]  isolation_level
+[t+00.912] [A] -----------------
+[t+00.912] [A]  read committed
+[t+00.912] [A] (1 row)
+[t+01.313] [A] hdmb=*#
+[t+01.313] [A] >> SELECT balance AS a_first_read FROM account WHERE account_id = 900001;
+[t+01.316] [A]  a_first_read
+[t+01.316] [A] --------------
+[t+01.316] [A]     100000.00
+[t+01.316] [A] (1 row)
+[t+01.818] [A] hdmb=*#
+[t+01.818] [--] ### B transfers 5,000.00 out of 900001 and commits
+[t+01.819] [B] >> SELECT fn_transfer_funds(900001, 900002, 5000.00, 'DEMO-D4-RC') AS b_txn;
+[t+01.844] [B]  b_txn
+[t+01.844] [B] --------
+[t+01.844] [B]  274830
+[t+01.844] [B] (1 row)
+[t+02.819] [B] hdmb=#
+[t+02.820] [--] ### A re-reads the same row in the same still-open transaction
+[t+02.820] [A] >> SELECT balance AS a_second_read FROM account WHERE account_id = 900001;
+[t+02.823] [A]  a_second_read
+[t+02.823] [A] ---------------
+[t+02.823] [A]       95000.00
+[t+02.823] [A] (1 row)
+[t+03.425] [A] hdmb=*#
+[t+03.425] [A] >> COMMIT;
+[t+03.829] [A] hdmb=#
+[t+03.829] [--] ### =========== PART 2: A at REPEATABLE READ ===========
+[t+03.829] [A] >> BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+[t+04.135] [A] hdmb=*#
+[t+04.135] [A] >> SELECT current_setting('transaction_isolation') AS isolation_level;
+[t+04.154] [A]  isolation_level
+[t+04.154] [A] -----------------
+[t+04.154] [A]  repeatable read
+[t+04.154] [A] (1 row)
+[t+04.549] [A] hdmb=*#
+[t+04.550] [A] >> SELECT balance AS a_first_read FROM account WHERE account_id = 900001;
+[t+04.584] [A]  a_first_read
+[t+04.584] [A] --------------
+[t+04.584] [A]      95000.00
+[t+04.584] [A] (1 row)
+[t+05.053] [A] hdmb=*#
+[t+05.053] [--] ### B transfers another 5,000.00 and commits
+[t+05.053] [B] >> SELECT fn_transfer_funds(900001, 900002, 5000.00, 'DEMO-D4-RR') AS b_txn;
+[t+05.096] [B]  b_txn
+[t+05.096] [B] --------
+[t+05.096] [B]  274831
+[t+05.096] [B] (1 row)
+[t+06.055] [B] hdmb=#
+[t+06.056] [A] >> SELECT balance AS a_second_read FROM account WHERE account_id = 900001;
+[t+06.142] [A]  a_second_read
+[t+06.142] [A] ---------------
+[t+06.142] [A]       95000.00
+[t+06.142] [A] (1 row)
+[t+06.668] [A] hdmb=*#
+[t+06.668] [--] ### A's snapshot is frozen. Outside the transaction the new value is visible
+[t+06.670] [A] >> COMMIT;
+[t+07.159] [A] hdmb=#
+[t+07.193] [A] >> SELECT balance AS a_read_after_commit FROM account WHERE account_id = 900001;
+[t+07.606] [A]  a_read_after_commit
+[t+07.606] [A] ---------------------
+[t+07.606] [A]             90000.00
+[t+07.606] [A] (1 row)
+[t+07.795] [A] hdmb=#
+------------------------------------------------------------------------------

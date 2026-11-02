@@ -1,0 +1,119 @@
+==============================================================================
+D5 - WRITE SKEW and SERIALIZABLE: a limit two transactions can break together
+==============================================================================
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:08:07 WAT
+
+WHAT THIS DEMONSTRATES
+  HDMB enforces a daily debit limit of NGN 50,000.00 per account. Each
+  session checks the limit by summing today's debits, and each then posts a
+  NGN 30,000.00 debit. Individually both checks pass; together they breach
+  the limit by 10,000.00. This is write skew - neither transaction writes a
+  row the other read, so no row lock can catch it.
+  PART 1 runs both at REPEATABLE READ. PART 2 runs both at SERIALIZABLE.
+
+EXPECTED RESULT
+  PART 1 (REPEATABLE READ): both commit. Total debited = 60,000.00 against a
+  50,000.00 limit. The rule is broken with no error anywhere.
+  PART 2 (SERIALIZABLE): PostgreSQL's predicate locking detects that the two
+  transactions cannot be serialised and aborts one with
+  SQLSTATE 40001 (could not serialize access due to read/write
+  dependencies). The application must retry, and the limit holds.
+
+TRANSCRIPT  (t = seconds from start of demo; >> = statement sent)
+------------------------------------------------------------------------------
+[t+00.000] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+00.142] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+00.142] [A] --------------+------------------+-----------+--------------
+[t+00.142] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+00.142] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+00.142] [A] (2 rows)
+[t+00.605] [A] hdmb=#
+[t+00.605] [A] >> DELETE FROM ledger_entry WHERE txn_id IN (SELECT txn_id FROM txn WHERE txn_ref LIKE 'DEMO-D5%'); DELETE FROM txn WHERE txn_ref LIKE 'DEMO-D5%';
+[t+01.110] [A] hdmb=#
+[t+01.110] [--] ### =========== PART 1: both sessions at REPEATABLE READ ===========
+[t+01.110] [A] >> BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+[t+01.311] [A] hdmb=*#
+[t+01.311] [B] >> BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+[t+01.517] [B] hdmb=*#
+[t+01.517] [A] >> SELECT COALESCE(sum(le.amount),0) AS a_sees_debited_today FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5%';
+[t+01.520] [A]  a_sees_debited_today
+[t+01.520] [A] ----------------------
+[t+01.520] [A]                     0
+[t+01.520] [A] (1 row)
+[t+01.922] [A] hdmb=*#
+[t+01.922] [B] >> SELECT COALESCE(sum(le.amount),0) AS b_sees_debited_today FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5%';
+[t+01.931] [B]  b_sees_debited_today
+[t+01.931] [B] ----------------------
+[t+01.931] [B]                     0
+[t+01.931] [B] (1 row)
+[t+02.325] [B] hdmb=*#
+[t+02.325] [--] ### both saw 0.00 debited, so both believe a 30,000.00 debit is within the 50,000.00 limit
+[t+02.325] [A] >> INSERT INTO txn (txn_ref, txn_type, channel_code, amount, status, initiated_by_customer, completed_at) VALUES ('DEMO-D5-RR-A','WITHDRAWAL','ATM',30000.00,'SUCCESS',900001,now());
+[t+02.626] [A] hdmb=*#
+[t+02.626] [A] >> INSERT INTO ledger_entry (txn_id, account_id, direction, amount, balance_after) SELECT txn_id, 900001, 'DR', 30000.00, 70000.00 FROM txn WHERE txn_ref='DEMO-D5-RR-A' UNION ALL SELECT txn_id, 900002, 'CR', 30000.00, 130000.00 FROM txn WHERE txn_ref='DEMO-D5-RR-A';
+[t+02.929] [A] hdmb=*#
+[t+02.929] [B] >> INSERT INTO txn (txn_ref, txn_type, channel_code, amount, status, initiated_by_customer, completed_at) VALUES ('DEMO-D5-RR-B','WITHDRAWAL','ATM',30000.00,'SUCCESS',900001,now());
+[t+03.233] [B] hdmb=*#
+[t+03.233] [B] >> INSERT INTO ledger_entry (txn_id, account_id, direction, amount, balance_after) SELECT txn_id, 900001, 'DR', 30000.00, 70000.00 FROM txn WHERE txn_ref='DEMO-D5-RR-B' UNION ALL SELECT txn_id, 900002, 'CR', 30000.00, 130000.00 FROM txn WHERE txn_ref='DEMO-D5-RR-B';
+[t+03.538] [B] hdmb=*#
+[t+03.538] [A] >> COMMIT;
+[t+04.039] [A] hdmb=#
+[t+04.039] [B] >> COMMIT;
+[t+04.741] [B] hdmb=#
+[t+04.741] [A] >> SELECT sum(le.amount) AS total_debited_today, 50000.00 AS daily_limit, CASE WHEN sum(le.amount) > 50000 THEN 'LIMIT BREACHED' ELSE 'within limit' END AS outcome FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5-RR%';
+[t+04.748] [A]  total_debited_today | daily_limit |    outcome
+[t+04.748] [A] ---------------------+-------------+----------------
+[t+04.748] [A]             60000.00 |    50000.00 | LIMIT BREACHED
+[t+04.748] [A] (1 row)
+[t+05.546] [A] hdmb=#
+[t+05.546] [--] ### =========== PART 2: both sessions at SERIALIZABLE ===========
+[t+05.546] [A] >> DELETE FROM ledger_entry WHERE txn_id IN (SELECT txn_id FROM txn WHERE txn_ref LIKE 'DEMO-D5%'); DELETE FROM txn WHERE txn_ref LIKE 'DEMO-D5%';
+[t+06.051] [A] hdmb=#
+[t+06.051] [A] >> BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+[t+06.256] [A] hdmb=*#
+[t+06.256] [B] >> BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+[t+06.456] [B] hdmb=*#
+[t+06.456] [A] >> SELECT COALESCE(sum(le.amount),0) AS a_sees_debited_today FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5%';
+[t+06.464] [A]  a_sees_debited_today
+[t+06.464] [A] ----------------------
+[t+06.464] [A]                     0
+[t+06.464] [A] (1 row)
+[t+06.861] [A] hdmb=*#
+[t+06.861] [B] >> SELECT COALESCE(sum(le.amount),0) AS b_sees_debited_today FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5%';
+[t+06.866] [B]  b_sees_debited_today
+[t+06.866] [B] ----------------------
+[t+06.866] [B]                     0
+[t+06.866] [B] (1 row)
+[t+07.266] [B] hdmb=*#
+[t+07.266] [A] >> INSERT INTO txn (txn_ref, txn_type, channel_code, amount, status, initiated_by_customer, completed_at) VALUES ('DEMO-D5-SER-A','WITHDRAWAL','ATM',30000.00,'SUCCESS',900001,now());
+[t+07.570] [A] hdmb=*#
+[t+07.570] [A] >> INSERT INTO ledger_entry (txn_id, account_id, direction, amount, balance_after) SELECT txn_id, 900001, 'DR', 30000.00, 70000.00 FROM txn WHERE txn_ref='DEMO-D5-SER-A' UNION ALL SELECT txn_id, 900002, 'CR', 30000.00, 130000.00 FROM txn WHERE txn_ref='DEMO-D5-SER-A';
+[t+07.871] [A] hdmb=*#
+[t+07.871] [B] >> INSERT INTO txn (txn_ref, txn_type, channel_code, amount, status, initiated_by_customer, completed_at) VALUES ('DEMO-D5-SER-B','WITHDRAWAL','ATM',30000.00,'SUCCESS',900001,now());
+[t+08.176] [B] hdmb=*#
+[t+08.176] [B] >> INSERT INTO ledger_entry (txn_id, account_id, direction, amount, balance_after) SELECT txn_id, 900001, 'DR', 30000.00, 70000.00 FROM txn WHERE txn_ref='DEMO-D5-SER-B' UNION ALL SELECT txn_id, 900002, 'CR', 30000.00, 130000.00 FROM txn WHERE txn_ref='DEMO-D5-SER-B';
+[t+08.478] [B] hdmb=*#
+[t+08.478] [A] >> COMMIT;
+[t+09.079] [A] hdmb=#
+[t+09.079] [--] ### A committed first. B must now be refused if the two are not serialisable
+[t+09.079] [B] >> COMMIT;
+[t+09.084] [B] ERROR:  could not serialize access due to read/write dependencies among transactions
+[t+09.085] [B] DETAIL:  Reason code: Canceled on identification as a pivot, during conflict out checking.
+[t+09.085] [B] HINT:  The transaction might succeed if retried.
+[t+09.085] [B] CONTEXT:  SQL statement "SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'DR'), 0),
+[t+09.085] [B]            COALESCE(SUM(amount) FILTER (WHERE direction = 'CR'), 0)
+[t+09.085] [B]                             FROM ledger_entry
+[t+09.085] [B]      WHERE txn_id = NEW.txn_id"
+[t+09.085] [B] PL/pgSQL function assert_txn_balanced() line 6 at SQL statement
+[t+10.083] [B] hdmb=#
+[t+10.083] [B] >> ROLLBACK;
+[t+10.085] [B] WARNING:  there is no transaction in progress
+[t+10.484] [B] hdmb=#
+[t+10.484] [A] >> SELECT COALESCE(sum(le.amount),0) AS total_debited_today, 50000.00 AS daily_limit, CASE WHEN COALESCE(sum(le.amount),0) > 50000 THEN 'LIMIT BREACHED' ELSE 'within limit' END AS outcome FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE le.account_id=900001 AND le.direction='DR' AND t.txn_ref LIKE 'DEMO-D5-SER%';
+[t+10.494] [A]  total_debited_today | daily_limit |   outcome
+[t+10.494] [A] ---------------------+-------------+--------------
+[t+10.494] [A]             30000.00 |    50000.00 | within limit
+[t+10.494] [A] (1 row)
+[t+11.287] [A] hdmb=#
+------------------------------------------------------------------------------
