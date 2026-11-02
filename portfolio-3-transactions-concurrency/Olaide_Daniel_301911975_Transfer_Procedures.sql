@@ -11,6 +11,13 @@
 --   Durability  - an acknowledged transfer must survive a crash
 -- =====================================================================
 
+-- CREATE OR REPLACE cannot change a function's declared OUT names or return
+-- type, so the script drops first to stay re-runnable while being developed.
+DROP FUNCTION IF EXISTS fn_reset_demo_accounts();
+DROP FUNCTION IF EXISTS fn_transfer_funds(BIGINT, BIGINT, NUMERIC, VARCHAR, VARCHAR, BIGINT);
+DROP FUNCTION IF EXISTS fn_transfer_naive(BIGINT, BIGINT, NUMERIC, VARCHAR);
+DROP FUNCTION IF EXISTS fn_reverse_txn(VARCHAR, TEXT);
+
 -- ---------------------------------------------------------------------
 -- 1. The correct transfer
 -- ---------------------------------------------------------------------
@@ -187,19 +194,60 @@ END $$;
 -- ---------------------------------------------------------------------
 -- 4. Helper: the two test accounts used by every demo, reset to a known state
 -- ---------------------------------------------------------------------
+-- The opening NGN 100,000.00 is posted as a real DEPOSIT against a branch
+-- till, not written straight into account.balance. That matters: it means
+-- the demo accounts reconcile with the ledger at the start of every demo, so
+-- any discrepancy a demo reports afterwards was created BY the demo.
 CREATE OR REPLACE FUNCTION fn_reset_demo_accounts()
-RETURNS TABLE (account_id BIGINT, account_number CHAR(10), balance NUMERIC)
+-- OUT names are prefixed: a plain `account_id` would be ambiguous against the
+-- table column inside the function body
+RETURNS TABLE (r_account_id BIGINT, r_account_number CHAR(10), r_balance NUMERIC, r_ledger_net NUMERIC)
 LANGUAGE plpgsql AS $$
+DECLARE
+    v_till   BIGINT;
+    v_txn    BIGINT;
+    v_acct   BIGINT;
 BEGIN
-    -- remove anything previous demos posted
-    DELETE FROM ledger_entry WHERE txn_id IN (SELECT txn_id FROM txn WHERE txn_ref LIKE 'DEMO-%' OR txn_ref LIKE 'REV-DEMO-%');
+    -- remove everything any previous demo posted
+    DELETE FROM ledger_entry WHERE txn_id IN (
+        SELECT txn_id FROM txn WHERE txn_ref LIKE 'DEMO-%' OR txn_ref LIKE 'REV-DEMO-%');
     DELETE FROM txn WHERE txn_ref LIKE 'DEMO-%' OR txn_ref LIKE 'REV-DEMO-%';
 
-    UPDATE account SET balance = 100000.00, status = 'ACTIVE' WHERE account_id IN (900001, 900002);
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'demo accounts missing - run Olaide_Daniel_301911975_Demo_Setup.sql first';
-    END IF;
+    SELECT a.account_id INTO v_till
+      FROM account a WHERE a.product_code = 'TILL' ORDER BY a.account_id LIMIT 1;
 
-    RETURN QUERY SELECT a.account_id, a.account_number, a.balance
-                   FROM account a WHERE a.account_id IN (900001, 900002) ORDER BY a.account_id;
+    FOREACH v_acct IN ARRAY ARRAY[900001::BIGINT, 900002::BIGINT] LOOP
+        UPDATE account SET balance = 0, status = 'ACTIVE' WHERE account.account_id = v_acct;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'demo account % missing - run Olaide_Daniel_301911975_Demo_Setup.sql first', v_acct;
+        END IF;
+
+        INSERT INTO txn (txn_ref, txn_type, channel_code, amount, status, narration,
+                         initiated_by_staff, created_at, completed_at)
+        VALUES ('DEMO-OPENING-' || v_acct, 'DEPOSIT', 'BRANCH', 100000.00, 'SUCCESS',
+                'Concurrency lab opening balance', 1, now(), now())
+        RETURNING txn_id INTO v_txn;
+
+        INSERT INTO ledger_entry (txn_id, account_id, direction, amount, balance_after)
+        VALUES (v_txn, v_till, 'DR', 100000.00,
+                (SELECT a.balance - 100000.00 FROM account a WHERE a.account_id = v_till)),
+               (v_txn, v_acct, 'CR', 100000.00, 100000.00);
+
+        UPDATE account SET balance = 100000.00 WHERE account.account_id = v_acct;
+        UPDATE account SET balance = balance - 100000.00 WHERE account.account_id = v_till;
+    END LOOP;
+
+    -- keep the till reconciled with its own postings after repeated resets
+    UPDATE account a
+       SET balance = COALESCE((SELECT sum(CASE WHEN le.direction = 'CR' THEN le.amount
+                                               ELSE -le.amount END)
+                                 FROM ledger_entry le WHERE le.account_id = v_till), 0)
+     WHERE a.account_id = v_till;
+
+    RETURN QUERY
+        SELECT a.account_id, a.account_number, a.balance,
+               COALESCE((SELECT sum(CASE WHEN le.direction = 'CR' THEN le.amount
+                                         ELSE -le.amount END)
+                           FROM ledger_entry le WHERE le.account_id = a.account_id), 0)
+          FROM account a WHERE a.account_id IN (900001, 900002) ORDER BY a.account_id;
 END $$;
