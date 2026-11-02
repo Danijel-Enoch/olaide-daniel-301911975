@@ -1,0 +1,70 @@
+==============================================================================
+D2 - ROLLBACK: a failed business rule undoes the whole unit of work
+==============================================================================
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:07:30 WAT
+
+WHAT THIS DEMONSTRATES
+  Session A makes a valid NGN 10,000.00 transfer, then attempts a second
+  transfer of NGN 120,000.00 which breaches the minimum-balance rule. The
+  exception aborts the transaction; the first, perfectly valid transfer is
+  rolled back with it. That is atomicity at the level of the unit of work,
+  not the statement.
+
+EXPECTED RESULT
+  - First transfer succeeds inside the transaction
+  - Second raises: insufficient funds ... (SQLSTATE 23514)
+  - Any statement after the error is refused: 'current transaction is aborted'
+  - After ROLLBACK both balances are back to 100,000.00
+  - No DEMO-D2 rows survive in txn or ledger_entry
+
+TRANSCRIPT  (t = seconds from start of demo; >> = statement sent)
+------------------------------------------------------------------------------
+[t+00.000] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+00.104] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+00.104] [A] --------------+------------------+-----------+--------------
+[t+00.104] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+00.104] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+00.104] [A] (2 rows)
+[t+00.602] [A] hdmb=#
+[t+00.602] [A] >> BEGIN;
+[t+00.907] [A] hdmb=*#
+[t+00.907] [A] >> SELECT fn_transfer_funds(900001, 900002, 10000.00, 'DEMO-D2-VALID') AS ok_txn;
+[t+00.919] [A]  ok_txn
+[t+00.919] [A] --------
+[t+00.919] [A]  274820
+[t+00.919] [A] (1 row)
+[t+01.708] [A] hdmb=*#
+[t+01.708] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+01.714] [A]  account_id | account_number |  balance
+[t+01.714] [A] ------------+----------------+-----------
+[t+01.714] [A]      900001 | 9900000001     |  90000.00
+[t+01.714] [A]      900002 | 9900000002     | 110000.00
+[t+01.714] [A] (2 rows)
+[t+02.209] [A] hdmb=*#
+[t+02.209] [--] ### now a transfer that breaches the NGN 5,000.00 minimum balance
+[t+02.209] [A] >> SELECT fn_transfer_funds(900001, 900002, 120000.00, 'DEMO-D2-TOOBIG') AS should_fail;
+[t+02.215] [A] ERROR:  insufficient funds on 9900000001: balance 90000.00, requested 120000.00, minimum balance 5000.00
+[t+02.215] [A] CONTEXT:  PL/pgSQL function fn_transfer_funds(bigint,bigint,numeric,character varying,character varying,bigint) line 55 at RAISE
+[t+03.110] [A] hdmb=!#
+[t+03.110] [--] ### the transaction is now in an aborted state - prove it
+[t+03.110] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+03.117] [A] ERROR:  current transaction is aborted, commands ignored until end of transaction block
+[t+03.716] [A] hdmb=!#
+[t+03.716] [A] >> ROLLBACK;
+[t+04.220] [A] hdmb=#
+[t+04.220] [--] ### after rollback: balances restored AND the valid transfer is gone too
+[t+04.220] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+04.225] [A]  account_id | account_number |  balance
+[t+04.225] [A] ------------+----------------+-----------
+[t+04.225] [A]      900001 | 9900000001     | 100000.00
+[t+04.225] [A]      900002 | 9900000002     | 100000.00
+[t+04.225] [A] (2 rows)
+[t+04.726] [A] hdmb=#
+[t+04.726] [A] >> SELECT count(*) AS surviving_demo_d2_rows FROM txn WHERE txn_ref LIKE 'DEMO-D2%';
+[t+04.771] [A]  surviving_demo_d2_rows
+[t+04.771] [A] ------------------------
+[t+04.771] [A]                       0
+[t+04.771] [A] (1 row)
+[t+05.331] [A] hdmb=#
+------------------------------------------------------------------------------
