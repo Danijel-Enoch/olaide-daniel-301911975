@@ -1,0 +1,123 @@
+==============================================================================
+D3 - LOST UPDATE: the same workload with and without row locking
+==============================================================================
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:07:44 WAT
+
+WHAT THIS DEMONSTRATES
+  Account 900001 holds NGN 100,000.00. Two sessions each try to send
+  NGN 60,000.00 out of it at the same instant. Only one can legitimately
+  succeed.
+  PART 1 uses fn_transfer_naive(): it reads the balance, checks it, waits
+  (standing in for application latency) and writes back balance - amount.
+  PART 2 repeats the identical workload through fn_transfer_funds(), which
+  locks the row with SELECT ... FOR UPDATE and writes balance = balance - x.
+
+EXPECTED RESULT
+  PART 1 - both sessions read 100,000.00, both pass their own check, both
+  commit. The second UPDATE overwrites the first: the account ends
+  at 40,000.00 having paid out 120,000.00. NGN 60,000.00 has been
+  created from nothing, and account.balance no longer reconciles
+  with the ledger.
+  PART 2 - the second session blocks on the row lock until the first
+  commits, then re-reads the real balance and is correctly refused
+  with 'insufficient funds'. Final balance 40,000.00 after a single
+  successful 60,000.00 transfer, and the ledger reconciles.
+
+TRANSCRIPT  (t = seconds from start of demo; >> = statement sent)
+------------------------------------------------------------------------------
+[t+00.000] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+00.074] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+00.074] [A] --------------+------------------+-----------+--------------
+[t+00.074] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+00.074] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+00.074] [A] (2 rows)
+[t+00.602] [A] hdmb=#
+[t+00.602] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+00.608] [A]  account_id | account_number |  balance
+[t+00.608] [A] ------------+----------------+-----------
+[t+00.608] [A]      900001 | 9900000001     | 100000.00
+[t+00.608] [A]      900002 | 9900000002     | 100000.00
+[t+00.608] [A] (2 rows)
+[t+01.107] [A] hdmb=#
+[t+01.107] [--] ### =========== PART 1: fn_transfer_naive (no row lock) ===========
+[t+01.107] [A] >> SELECT fn_transfer_naive(900001, 900002, 60000.00, 'DEMO-D3-NAIVE-A') AS a_txn;
+[t+01.161] [B] >> SELECT fn_transfer_naive(900001, 900002, 60000.00, 'DEMO-D3-NAIVE-B') AS b_txn;
+[t+01.433] [A]  a_txn
+[t+01.433] [A] --------
+[t+01.433] [A]  274823
+[t+01.433] [A] (1 row)
+[t+01.654] [B]  b_txn
+[t+01.654] [B] --------
+[t+01.654] [B]  274824
+[t+01.654] [B] (1 row)
+[t+02.766] [A] hdmb=#
+[t+02.766] [B] hdmb=#
+[t+02.766] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+02.773] [A]  account_id | account_number |  balance
+[t+02.773] [A] ------------+----------------+-----------
+[t+02.773] [A]      900001 | 9900000001     |  40000.00
+[t+02.773] [A]      900002 | 9900000002     | 160000.00
+[t+02.773] [A] (2 rows)
+[t+03.367] [A] hdmb=#
+[t+03.367] [--] ### reconciliation check: does account.balance still equal the ledger?
+[t+03.367] [A] >> SELECT a.account_id, a.balance AS stored_balance, COALESCE(sum(CASE WHEN le.direction='CR' THEN le.amount ELSE -le.amount END),0) AS ledger_net, a.balance - COALESCE(sum(CASE WHEN le.direction='CR' THEN le.amount ELSE -le.amount END),0) AS discrepancy FROM account a LEFT JOIN ledger_entry le ON le.account_id = a.account_id WHERE a.account_id IN (900001,900002) GROUP BY a.account_id, a.balance ORDER BY a.account_id;
+[t+03.375] [A]  account_id | stored_balance | ledger_net | discrepancy
+[t+03.375] [A] ------------+----------------+------------+-------------
+[t+03.375] [A]      900001 |       40000.00 |  -20000.00 |    60000.00
+[t+03.375] [A]      900002 |      160000.00 |  220000.00 |   -60000.00
+[t+03.375] [A] (2 rows)
+[t+04.172] [A] hdmb=#
+[t+04.172] [A] >> SELECT count(*) AS debits_allowed_against_one_balance, sum(le.amount) AS total_paid_out FROM ledger_entry le JOIN txn t ON t.txn_id=le.txn_id WHERE t.txn_ref LIKE 'DEMO-D3-NAIVE%' AND le.direction='DR';
+[t+04.222] [A]  debits_allowed_against_one_balance | total_paid_out
+[t+04.222] [A] ------------------------------------+----------------
+[t+04.222] [A]                                   2 |      120000.00
+[t+04.222] [A] (1 row)
+[t+04.877] [A] hdmb=#
+[t+04.877] [--] ### =========== PART 2: fn_transfer_funds (SELECT FOR UPDATE) ===========
+[t+04.877] [A] >> SELECT * FROM fn_reset_demo_accounts();
+[t+04.934] [A]  r_account_id | r_account_number | r_balance | r_ledger_net
+[t+04.934] [A] --------------+------------------+-----------+--------------
+[t+04.934] [A]        900001 | 9900000001       | 100000.00 |    100000.00
+[t+04.934] [A]        900002 | 9900000002       | 100000.00 |    100000.00
+[t+04.934] [A] (2 rows)
+[t+05.682] [A] hdmb=#
+[t+05.682] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+05.685] [A]  account_id | account_number |  balance
+[t+05.685] [A] ------------+----------------+-----------
+[t+05.685] [A]      900001 | 9900000001     | 100000.00
+[t+05.685] [A]      900002 | 9900000002     | 100000.00
+[t+05.685] [A] (2 rows)
+[t+06.187] [A] hdmb=#
+[t+06.187] [A] >> BEGIN;
+[t+06.492] [A] hdmb=*#
+[t+06.492] [A] >> SELECT fn_transfer_funds(900001, 900002, 60000.00, 'DEMO-D3-SAFE-A') AS a_txn;
+[t+06.501] [A]  a_txn
+[t+06.501] [A] --------
+[t+06.501] [A]  274827
+[t+06.501] [A] (1 row)
+[t+06.897] [A] hdmb=*#
+[t+06.897] [--] ### B now attempts the same thing and MUST block on A's row lock
+[t+06.897] [B] >> SELECT fn_transfer_funds(900001, 900002, 60000.00, 'DEMO-D3-SAFE-B') AS b_txn;
+[t+08.102] [--] ### B has produced no output above: it is waiting. A commits now
+[t+08.102] [A] >> COMMIT;
+[t+08.116] [B] ERROR:  insufficient funds on 9900000001: balance 40000.00, requested 60000.00, minimum balance 5000.00
+[t+08.116] [B] CONTEXT:  PL/pgSQL function fn_transfer_funds(bigint,bigint,numeric,character varying,character varying,bigint) line 55 at RAISE
+[t+09.608] [A] hdmb=#
+[t+09.608] [B] hdmb=#
+[t+09.608] [--] ### B woke up, re-read the real balance and was refused
+[t+09.608] [A] >> SELECT account_id, account_number, balance FROM account WHERE account_id IN (900001, 900002) ORDER BY account_id;
+[t+09.612] [A]  account_id | account_number |  balance
+[t+09.612] [A] ------------+----------------+-----------
+[t+09.612] [A]      900001 | 9900000001     |  40000.00
+[t+09.612] [A]      900002 | 9900000002     | 160000.00
+[t+09.612] [A] (2 rows)
+[t+10.212] [A] hdmb=#
+[t+10.212] [A] >> SELECT a.account_id, a.balance AS stored_balance, COALESCE(sum(CASE WHEN le.direction='CR' THEN le.amount ELSE -le.amount END),0) AS ledger_net, a.balance - COALESCE(sum(CASE WHEN le.direction='CR' THEN le.amount ELSE -le.amount END),0) AS discrepancy FROM account a LEFT JOIN ledger_entry le ON le.account_id = a.account_id WHERE a.account_id IN (900001,900002) GROUP BY a.account_id, a.balance ORDER BY a.account_id;
+[t+10.217] [A]  account_id | stored_balance | ledger_net | discrepancy
+[t+10.217] [A] ------------+----------------+------------+-------------
+[t+10.217] [A]      900001 |       40000.00 |   40000.00 |        0.00
+[t+10.217] [A]      900002 |      160000.00 |  160000.00 |        0.00
+[t+10.217] [A] (2 rows)
+[t+11.017] [A] hdmb=#
+------------------------------------------------------------------------------
