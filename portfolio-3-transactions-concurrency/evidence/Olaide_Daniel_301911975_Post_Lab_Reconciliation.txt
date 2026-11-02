@@ -1,0 +1,39 @@
+=== transactions where debits <> credits (must be 0) ===
+ unbalanced_transactions 
+-------------------------
+                       0
+(1 row)
+
+=== accounts whose stored balance <> ledger position (must be 0) ===
+ accounts_out_of_balance 
+-------------------------
+                       0
+(1 row)
+
+=== overdrawn customer accounts (must be 0) ===
+ overdrawn 
+-----------
+         0
+(1 row)
+
+=== the demo accounts, as the lab left them ===
+ account_id | account_number | stored_balance | ledger_net 
+------------+----------------+----------------+------------
+     900001 | 9900000001     |       97000.00 |   97000.00
+     900002 | 9900000002     |      103000.00 |  103000.00
+(2 rows)
+
+=== audit trail written during the lab ===
+ audit_rows_for_demo_accounts |         first_change         |          last_change          
+------------------------------+------------------------------+-------------------------------
+                           92 | 2026-11-05 22:04:29.16579+00 | 2026-11-05 22:09:27.361932+00
+(1 row)
+
+=== transaction status mix across the whole bank ===
+  status  | count  
+----------+--------
+ SUCCESS  | 273120
+ FAILED   |   1184
+ REVERSED |    495
+(3 rows)
+
