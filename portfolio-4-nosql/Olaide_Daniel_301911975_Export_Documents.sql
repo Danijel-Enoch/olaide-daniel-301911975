@@ -132,9 +132,17 @@ SELECT json_strip_nulls(json_build_object(
              WHERE le.txn_id = t.txn_id)
 ))::text
 FROM txn t
-WHERE t.created_at >= now() - INTERVAL '120 days'
-  AND t.txn_ref NOT LIKE 'DEMO-%' AND t.txn_ref NOT LIKE 'REV-DEMO-%'
-ORDER BY t.created_at
+-- The event slice must cover the SAME customers as the profile slice above,
+-- or the two collections describe different populations and every join-free
+-- read lands on a customer whose events are missing. Consistency of the
+-- extract matters as much as its shape.
+WHERE t.txn_ref NOT LIKE 'DEMO-%' AND t.txn_ref NOT LIKE 'REV-DEMO-%'
+  AND EXISTS (SELECT 1
+                FROM ledger_entry le
+                JOIN account a ON a.account_id = le.account_id
+               WHERE le.txn_id = t.txn_id
+                 AND a.customer_id BETWEEN 13 AND 2000)
+ORDER BY t.created_at DESC
 LIMIT 60000;
 \o
 
