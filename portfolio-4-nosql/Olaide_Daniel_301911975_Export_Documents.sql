@@ -63,8 +63,10 @@ SELECT json_strip_nulls(json_build_object(
     -- recent_activity is a BOUNDED embedded array (10 newest postings). The
     -- full history stays in the txn_event collection; embedding all of it
     -- would grow the document without limit and hit the 16MB BSON cap.
-    'recent_activity', (SELECT COALESCE(json_agg(ra ORDER BY (ra->>'ts_sort') DESC), '[]'::json)
-                        FROM (SELECT json_build_object(
+    -- ts_sort exists only to give json_agg a deterministic order and is
+    -- subtracted from each element before it reaches the document
+    'recent_activity', (SELECT COALESCE(json_agg((ra - 'ts_sort') ORDER BY (ra->>'ts_sort') DESC), '[]'::json)
+                        FROM (SELECT jsonb_build_object(
                                  'txn_ref', t.txn_ref, 'type', t.txn_type, 'channel', t.channel_code,
                                  'direction', le.direction, 'status', t.status,
                                  'amount', json_build_object('$numberDecimal', le.amount::text),
