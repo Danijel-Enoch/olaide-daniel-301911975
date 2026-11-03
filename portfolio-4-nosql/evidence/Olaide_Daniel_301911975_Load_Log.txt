@@ -1,0 +1,169 @@
+MIT 8103 Portfolio 4 - ETL load log
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:17:37 WAT
+
+--- export complete; line counts: ---
+     1988 /tmp/hdmb_customer_profile.jsonl
+    42924 /tmp/hdmb_txn_event.jsonl
+    44912 total
+  staged hdmb_customer_profile.jsonl
+  staged hdmb_txn_event.jsonl
+customer_profile docs : 1988
+txn_event docs        : 42924
+database size (MB)    : 31.68
+index size (MB)       : 0.95
+
+--- a stored document, as the mobile app receives it ---
+{
+  _id: 'CUST-0000013',
+  customer_id: 13,
+  bvn: '22000000001',
+  name: {
+    first: 'Chinedu',
+    last: 'Afolabi',
+    full: 'Chinedu Afolabi'
+  },
+  phone: '08000000001',
+  email: 'customer1@mail.test',
+  kyc_tier: 2,
+  status: 'ACTIVE',
+  registered_at: ISODate('2026-10-23T21:41:14.240Z'),
+  branch: {
+    code: 'HD02',
+    name: 'Yaba Digital',
+    state: 'Lagos',
+    city: 'Yaba'
+  },
+  accounts: [
+    {
+      account_number: '0000000013',
+      product: {
+        code: 'SAV-BASIC',
+        name: 'Harmony Basic Savings',
+        interest_rate_pa: 4.5,
+        min_balance: Decimal128('0.00')
+      },
+      currency: 'NGN',
+      balance: Decimal128('1144250.00'),
+      status: 'ACTIVE',
+      opened_at: ISODate('2026-10-23T21:41:14.240Z')
+    }
+  ],
+  beneficiaries: [],
+  recent_activity: [
+    {
+      ts: ISODate('2026-11-04T03:40:18.543Z'),
+      type: 'WITHDRAWAL',
+      amount: Decimal128('550.00'),
+      status: 'SUCCESS',
+      channel: 'MOBILE',
+      txn_ref: 'HDMB-20261104-000160921',
+      direction: 'DR',
+      balance_after: Decimal128('1144250.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-11-01T06:37:18.543Z'),
+      type: 'TRANSFER',
+      amount: Decimal128('700.00'),
+      status: 'SUCCESS',
+      channel: 'BRANCH',
+      txn_ref: 'HDMB-20261101-000016744',
+      direction: 'CR',
+      balance_after: Decimal128('1144800.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-10-23T21:45:14.240Z'),
+      type: 'DEPOSIT',
+      amount: Decimal128('1150000.00'),
+      status: 'SUCCESS',
+      channel: 'BRANCH',
+      txn_ref: 'HDMB-OPEN-0000000013',
+      direction: 'CR',
+      balance_after: Decimal128('1144100.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-10-15T06:20:18.543Z'),
+      type: 'WITHDRAWAL',
+      amount: Decimal128('1550.00'),
+      status: 'SUCCESS',
+      channel: 'POS',
+      txn_ref: 'HDMB-20261015-000180921',
+      direction: 'DR',
+      balance_after: Decimal128('-5900.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-10-12T09:17:18.543Z'),
+      type: 'TRANSFER',
+      amount: Decimal128('1700.00'),
+      status: 'SUCCESS',
+      channel: 'USSD',
+      txn_ref: 'HDMB-20261012-000036744',
+      direction: 'CR',
+      balance_after: Decimal128('-4350.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-09-25T09:00:18.543Z'),
+      type: 'WITHDRAWAL',
+      amount: Decimal128('2550.00'),
+      status: 'SUCCESS',
+      channel: 'ATM',
+      txn_ref: 'HDMB-20260925-000200921',
+      direction: 'DR',
+      balance_after: Decimal128('-6050.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-09-22T11:57:18.543Z'),
+      type: 'TRANSFER',
+      amount: Decimal128('2700.00'),
+      status: 'SUCCESS',
+      channel: 'WEB',
+      txn_ref: 'HDMB-20260922-000056744',
+      direction: 'CR',
+      balance_after: Decimal128('-3500.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-09-05T11:40:18.543Z'),
+      type: 'WITHDRAWAL',
+      amount: Decimal128('3550.00'),
+      status: 'SUCCESS',
+      channel: 'MOBILE',
+      txn_ref: 'HDMB-20260905-000220921',
+      direction: 'DR',
+      balance_after: Decimal128('-6200.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-09-02T14:37:18.543Z'),
+      type: 'TRANSFER',
+      amount: Decimal128('3700.00'),
+      status: 'SUCCESS',
+      channel: 'BRANCH',
+      txn_ref: 'HDMB-20260902-000076744',
+      direction: 'CR',
+      balance_after: Decimal128('-2650.00'),
+      account_number: '0000000013'
+    },
+    {
+      ts: ISODate('2026-08-16T14:20:18.543Z'),
+      type: 'WITHDRAWAL',
+      amount: Decimal128('4550.00'),
+      status: 'SUCCESS',
+      channel: 'POS',
+      txn_ref: 'HDMB-20260816-000240921',
+      direction: 'DR',
+      balance_after: Decimal128('-6350.00'),
+      account_number: '0000000013'
+    }
+  ],
+  totals: {
+    account_count: 1,
+    deposit_balance: Decimal128('1144250.00')
+  }
+}

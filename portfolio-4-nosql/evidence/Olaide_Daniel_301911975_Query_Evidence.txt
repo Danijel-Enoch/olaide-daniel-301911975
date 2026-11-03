@@ -1,0 +1,140 @@
+demonstration account : 0000000041 (27 events)  customer_id 41
+
+======================================================================
+M1  MOBILE HOME SCREEN - one document, no joins
+======================================================================
+wall-clock ms            : 2
+customer                 : Amaka Okonkwo  (HD06)
+accounts in the document : 1
+balance                  : NGN 1396750.00
+recent_activity embedded : 10 postings
+joins required           : 0
+{
+  plan: 'EXPRESS_IXSCAN(uq_customer_id)',
+  docsExamined: 1,
+  keysExamined: 1,
+  returned: 1,
+  ms: 0
+}
+
+======================================================================
+M2  WHO OWNS THIS ACCOUNT? - multikey index on an embedded array
+======================================================================
+{
+  _id: 'CUST-0000041',
+  name: {
+    full: 'Amaka Okonkwo'
+  },
+  phone: '08000000029',
+  branch: {
+    code: 'HD06'
+  },
+  accounts: [
+    {
+      account_number: '0000000041',
+      balance: Decimal128('1396750.00')
+    }
+  ]
+}
+{
+  plan: 'FETCH <- IXSCAN(ix_account_number)',
+  docsExamined: 1,
+  keysExamined: 1,
+  returned: 1,
+  ms: 0
+}
+
+======================================================================
+M3  ACCOUNT STATEMENT - the 20 newest events for one account
+======================================================================
+rows returned: 20
+  2026-10-31T03:36:15  TRANSFER   ATM     NGN 750.00
+  2026-10-11T06:16:15  TRANSFER   MOBILE  NGN 1750.00
+  2026-09-21T08:56:15  TRANSFER   POS     NGN 2750.00
+  2026-09-01T11:36:15  TRANSFER   ATM     NGN 3750.00
+  2026-08-12T14:16:15  TRANSFER   MOBILE  NGN 4750.00
+{
+  plan: 'LIMIT <- FETCH <- IXSCAN(ix_leg_account_time)',
+  docsExamined: 20,
+  keysExamined: 20,
+  returned: 20,
+  ms: 0
+}
+
+======================================================================
+M4  CHANNEL DASHBOARD - aggregation pipeline (equivalent of SQL Q3)
+======================================================================
+  MOBILE  attempted   1207   failed   11   failure%  0.91   value NGN 3234850.00
+  ATM     attempted   1204   failed    8   failure%  0.66   value NGN 3435600.00
+  WEB     attempted   1075   failed    6   failure%  0.56   value NGN 2634750.00
+  USSD    attempted   1072   failed    6   failure%  0.56   value NGN 2480350.00
+  BRANCH  attempted   1247   failed    4   failure%  0.32   value NGN 180515155.00
+  POS     attempted   1206   failed    3   failure%  0.25   value NGN 3272800.00
+
+======================================================================
+M5  TOP DEBIT OUTFLOW - $unwind over the embedded legs (SQL Q4)
+======================================================================
+  0000000569   debits   2   out NGN 2900.00
+  0000001669   debits   2   out NGN 2900.00
+  0000000549   debits   2   out NGN 2900.00
+  0000017749   debits   2   out NGN 2900.00
+  0000014769   debits   2   out NGN 2900.00
+  0000008389   debits   2   out NGN 2900.00
+  0000001229   debits   2   out NGN 2900.00
+  0000001989   debits   2   out NGN 2900.00
+  0000002009   debits   2   out NGN 2900.00
+  0000003849   debits   2   out NGN 2900.00
+
+======================================================================
+M6  DERIVED EDGE COLLECTION - a pipeline that writes ($merge)
+======================================================================
+edges built in 892 ms
+transfer_edge documents: 32758
+{
+  _id: 'HDMB-20261102-000129603',
+  amount: Decimal128('650.00'),
+  created_at: ISODate('2026-11-02T21:38:15.543Z'),
+  from_account: '0000000787',
+  to_account: '0000007180',
+  from_customer: 787,
+  to_customer: 7180
+}
+
+======================================================================
+M7  GRAPH TRAVERSAL - follow the money with $graphLookup
+======================================================================
+seed edge: 0000003688 -> 0000001139
+origin account   : 0000003688
+first hop        : 0000001139
+accounts reached within 4 hops: 13
+  hop 0  0000001139 -> 0000013548   NGN 950.00
+  hop 0  0000001139 -> 0000013548   NGN 2950.00
+  hop 0  0000001139 -> 0000013548   NGN 3950.00
+  hop 0  0000001139 -> 0000013548   NGN 4950.00
+  hop 0  0000001139 -> 0000013548   NGN 1450.00
+  hop 0  0000001139 -> 0000013548   NGN 2450.00
+  hop 0  0000001139 -> 0000013548   NGN 3450.00
+  hop 0  0000001139 -> 0000013548   NGN 1450.00
+
+======================================================================
+M8  SCHEMA VALIDATION - the writes the collection refuses
+======================================================================
+  V1 kyc_tier out of range (9) -> REJECTED: Document failed validation
+  V2 balance as a double, not decimal -> REJECTED: Document failed validation
+  V3 unknown status value -> REJECTED: Document failed validation
+  V4 single-leg transaction (money from nowhere) -> REJECTED: Document failed validation
+  V5 the same transaction with both legs (must SUCCEED) -> ACCEPTED
+
+======================================================================
+M9  WHAT THE VALIDATOR CANNOT DO
+======================================================================
+  unbalanced document (DR 5000 vs CR 4000) -> ACCEPTED  <-- no equivalent of
+  PostgreSQL trg_ledger_balanced exists here; the application must enforce it
+  detected only by querying for it afterwards: DR=5000.00 CR=4000.00
+
+======================================================================
+COLLECTION STATISTICS
+======================================================================
+  customer_profile  docs    1988   data 5.61 MB   indexes 0.25 MB   avg doc 2957 B
+  txn_event         docs   42924   data 26.08 MB   indexes 3.93 MB   avg doc 637 B
+  transfer_edge     docs   32758   data 5.44 MB   indexes 1.40 MB   avg doc 174 B
