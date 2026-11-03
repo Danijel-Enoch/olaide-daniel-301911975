@@ -1,0 +1,102 @@
+MIT 8103 Portfolio 4 - key-value (Redis) evidence
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:19:39 WAT
+Engine  : Redis 7.4.12
+
+======================================================================
+K1  SESSION TOKEN - state with a lifetime the store enforces itself
+======================================================================
+# a mobile login issues a token that must die on its own after 15 min
+OK
+GET  -> {"customer_id":41,"device":"android","tier":3}
+TTL  -> 900 seconds remaining
+# the same thing in PostgreSQL needs a session table plus a cron job to
+# delete expired rows. Here expiry is a property of the key.
+
+======================================================================
+K2  IDEMPOTENCY MARKER - SET NX replaces a UNIQUE constraint
+======================================================================
+# the payment switch retries on timeout. The second attempt must not
+# produce a second transfer.
+first  attempt: OK
+retry  attempt: 
+# nil means 'somebody already claimed this reference' - a single round
+# trip, no table, no lock, and it self-cleans after 24 hours.
+
+======================================================================
+K3  DAILY DEBIT LIMIT - the write-skew problem from Portfolio 3 D5,
+    solved by atomicity instead of by SERIALIZABLE
+======================================================================
+# D5 showed two REPEATABLE READ transactions each checking a 50,000.00
+# daily limit, both passing, and together breaching it. Here the check
+# and the increment are ONE atomic server-side script, so no two
+# clients can interleave between them.
+# three 30,000.00 debit attempts against a 50,000.00 daily limit:
+  attempt 1 -> 1|30000|ALLOWED
+  attempt 2 -> 0|30000|LIMIT_EXCEEDED
+  attempt 3 -> 0|30000|LIMIT_EXCEEDED
+total recorded: 30000
+# exactly one 30,000.00 debit was admitted. The limit held without any
+# isolation level, retry loop or 40001 error to handle.
+
+======================================================================
+K4  ATOMICITY UNDER REAL CONCURRENCY - contrast with the lost update
+======================================================================
+# Portfolio 3 D3 lost an update because the application did
+#   read -> compute -> write. INCR does it inside the server.
+# two clients, 1,000 increments each, fired in parallel:
+expected 2000, actual -> 2000
+
+======================================================================
+K5  CACHED BALANCE - speed bought with staleness, deliberately bounded
+======================================================================
+# the balance enquiry screen can tolerate 30 seconds of staleness;
+# the transfer path never reads this key, it reads PostgreSQL.
+OK
+cached balance -> NGN 1396750.00  (TTL 30 s)
+# the TTL IS the consistency policy, written in one place and enforced
+# by the store rather than by remembering to invalidate.
+
+======================================================================
+K6  RECENT ACTIVITY - a bounded list, the Redis form of the embedded
+    recent_activity array in the document model
+======================================================================
+list length after LTRIM -> 4
+WITHDRAWAL|5000.00|POS
+TRANSFER|1750.00|MOBILE
+FEE|52.50|USSD
+DEPOSIT|25000.00|BRANCH
+# LPUSH + LTRIM keeps the window bounded with no delete job and no
+# unbounded array growth - the same design goal as maxItems: 10 in the
+# MongoDB validator.
+
+======================================================================
+K7  CHANNEL LEAGUE TABLE - sorted set
+======================================================================
+# top 3 channels by value moved this month (ZREVRANGE, O(log n)):
+BRANCH
+180515155
+ATM
+3435600
+POS
+3272800
+# rank of USSD -> 5
+
+======================================================================
+K8  WHAT IS IN THE STORE, AND WHAT IT COSTS
+======================================================================
+7
+used_memory_human:1.38M
+maxmemory_policy:noeviction
+# keys and their types:
+  activity:0000000041                    type=list  ttl=-1
+  balance:0000000041                     type=string  ttl=29
+  channel:value:2026-11                  type=zset  ttl=-1
+  counter:ussd:txn_count                 type=string  ttl=-1
+  idem:HDMB-20261105-000000777           type=string  ttl=86398
+  limit:debit:900001:2026-11-05          type=string  ttl=86398
+  session:tok_8fc21a                     type=string  ttl=898
+
+# Every key above is either reconstructible from PostgreSQL or
+# genuinely disposable. Nothing here is the system of record: Redis
+# holds no data whose loss would cost a customer money.
