@@ -1,0 +1,74 @@
+MIT 8103 Portfolio 4 - relational equivalent of document query M1
+Student : Olaide Daniel (301911975)
+Note    : third consecutive run, so shared buffers are warm - the same
+          condition under which the MongoDB figures were taken.
+
+Pager usage is off.
+=== relational home screen: customer + accounts + product + branch ===
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.29..953.79 rows=1 width=149) (actual time=0.649..2.153 rows=1.00 loops=1)
+   Join Filter: ((p.product_code)::text = (a.product_code)::text)
+   Buffers: shared hit=641
+   ->  Nested Loop  (cost=0.29..952.67 rows=1 width=101) (actual time=0.641..2.145 rows=1.00 loops=1)
+         Join Filter: (b.branch_id = c.home_branch_id)
+         Rows Removed by Join Filter: 5
+         Buffers: shared hit=640
+         ->  Nested Loop  (cost=0.29..951.40 rows=1 width=87) (actual time=0.635..2.139 rows=1.00 loops=1)
+               Buffers: shared hit=639
+               ->  Index Scan using customer_pkey on customer c  (cost=0.29..8.30 rows=1 width=50) (actual time=0.021..0.022 rows=1.00 loops=1)
+                     Index Cond: (customer_id = 41)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+               ->  Seq Scan on account a  (cost=0.00..943.09 rows=1 width=45) (actual time=0.612..2.114 rows=1.00 loops=1)
+                     Filter: (customer_id = 41)
+                     Rows Removed by Filter: 24808
+                     Buffers: shared hit=633
+         ->  Seq Scan on branch b  (cost=0.00..1.12 rows=12 width=30) (actual time=0.004..0.004 rows=6.00 loops=1)
+               Buffers: shared hit=1
+   ->  Seq Scan on account_product p  (cost=0.00..1.05 rows=5 width=38) (actual time=0.001..0.001 rows=1.00 loops=1)
+         Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=524
+ Planning Time: 1.542 ms
+ Execution Time: 2.212 ms
+(25 rows)
+
+=== plus the statement the same screen shows (second round trip) ===
+                                                                                QUERY PLAN                                                                                
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=963.41..963.44 rows=10 width=74) (actual time=1.138..1.139 rows=10.00 loops=1)
+   Buffers: shared hit=751
+   ->  Sort  (cost=963.41..963.47 rows=22 width=74) (actual time=1.137..1.138 rows=10.00 loops=1)
+         Sort Key: le.entry_ts DESC, le.entry_id DESC
+         Sort Method: top-N heapsort  Memory: 26kB
+         Buffers: shared hit=751
+         ->  Nested Loop  (cost=0.85..962.94 rows=22 width=74) (actual time=0.107..1.097 rows=27.00 loops=1)
+               Buffers: shared hit=745
+               ->  Nested Loop  (cost=0.42..952.34 rows=22 width=39) (actual time=0.092..0.915 rows=27.00 loops=1)
+                     Buffers: shared hit=637
+                     ->  Seq Scan on account a  (cost=0.00..943.09 rows=1 width=8) (actual time=0.064..0.884 rows=1.00 loops=1)
+                           Filter: (customer_id = 41)
+                           Rows Removed by Filter: 24808
+                           Buffers: shared hit=633
+                     ->  Index Only Scan using idx_ledger_account_ts on ledger_entry le  (cost=0.42..8.95 rows=30 width=47) (actual time=0.026..0.028 rows=27.00 loops=1)
+                           Index Cond: (account_id = a.account_id)
+                           Heap Fetches: 0
+                           Index Searches: 1
+                           Buffers: shared hit=4
+               ->  Index Scan using txn_pkey on txn t  (cost=0.42..0.48 rows=1 width=51) (actual time=0.006..0.006 rows=1.00 loops=27)
+                     Index Cond: (txn_id = le.txn_id)
+                     Index Searches: 27
+                     Buffers: shared hit=108
+ Planning:
+   Buffers: shared hit=242
+ Planning Time: 0.742 ms
+ Execution Time: 1.167 ms
+(27 rows)
+
+=== the rows the application must then stitch together ===
+ rows_returned_by_the_join 
+---------------------------
+                         1
+(1 row)
+
