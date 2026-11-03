@@ -8,9 +8,19 @@ const db = db.getSiblingDB('hdmb');
 
 function hr(t) { print(''); print('='.repeat(70)); print(t); print('='.repeat(70)); }
 
-const ACCT = '0000001317';
-const ACCT2 = '0000001318';
-const CUST = 1317;
+// The demonstration account is chosen from the data rather than hard coded, so
+// the script keeps working when the extract is regenerated at a different size.
+const BUSIEST = db.txn_event.aggregate([
+    { $unwind: '$legs' },
+    { $match: { 'legs.product_code': { $ne: 'TILL' } } },
+    { $group: { _id: '$legs.account_number', n: { $sum: 1 } } },
+    { $sort: { n: -1, _id: 1 } },
+    { $limit: 50 }
+]).toArray().find(a => db.customer_profile.countDocuments({ 'accounts.account_number': a._id }) > 0);
+const ACCT = BUSIEST._id;
+const CUST = db.customer_profile.findOne({ 'accounts.account_number': ACCT }).customer_id;
+const ACCT2 = db.customer_profile.findOne({ 'accounts.account_number': { $ne: ACCT } }).accounts[0].account_number;
+print('demonstration account : ' + ACCT + ' (' + BUSIEST.n + ' events)  customer_id ' + CUST);
 
 // summarise an explain plan: the four numbers that actually matter
 function planOf(explain) {
@@ -136,17 +146,23 @@ hr('M7  GRAPH TRAVERSAL - follow the money with $graphLookup');
 // The fraud question a relational schema answers with a recursive CTE:
 // starting from one account, which accounts did money reach within three
 // hops? $graphLookup walks from_account -> to_account repeatedly.
-const seed = db.transfer_edge.findOne();
+// The seed must be an edge whose destination also SENDS money, otherwise the
+// traversal terminates at hop 0 and demonstrates nothing. The ledger graph is
+// sparse (32,758 edges over ~20,000 accounts), so the seed is searched for.
+const senders = new Set(db.transfer_edge.distinct('from_account'));
+let seed = null;
+db.transfer_edge.find({}, { from_account: 1, to_account: 1 }).limit(5000)
+  .forEach(e => { if (!seed && senders.has(e.to_account)) seed = e; });
+print('seed edge: ' + seed.from_account + ' -> ' + seed.to_account);
 const trail = db.transfer_edge.aggregate([
-    { $match: { from_account: seed.from_account } },
-    { $limit: 1 },
+    { $match: { _id: seed._id } },
     { $graphLookup: {
         from: 'transfer_edge',
         startWith: '$to_account',
         connectFromField: 'to_account',
         connectToField: 'from_account',
         as: 'money_trail',
-        maxDepth: 2,                       // 0-indexed: start + 2 = 3 hops
+        maxDepth: 3,                       // 0-indexed: start + 3 = 4 hops
         depthField: 'hop',
         restrictSearchWithMatch: { amount: { $gt: Decimal128('500') } }
     } },
@@ -159,7 +175,7 @@ const trail = db.transfer_edge.aggregate([
 ]).toArray();
 print('origin account   : ' + trail[0].origin);
 print('first hop        : ' + trail[0].first_hop);
-print('accounts reached within 3 hops: ' + trail[0].reached);
+print('accounts reached within 4 hops: ' + trail[0].reached);
 trail[0].trail.forEach(h => print('  hop ' + h.hop + '  ' + h.from + ' -> ' + h.to +
     '   NGN ' + h.amount.toString()));
 
