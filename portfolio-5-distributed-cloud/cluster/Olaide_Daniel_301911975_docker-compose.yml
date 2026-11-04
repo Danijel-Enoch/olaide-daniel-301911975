@@ -1,0 +1,133 @@
+# =====================================================================
+# MIT 8103 Advanced Database Systems - Portfolio 5
+# Student : Olaide Daniel (301911975)
+# File    : Distributed HDMB cluster - 1 primary, 2 streaming replicas,
+#           2 shard nodes
+# Usage   : docker compose -f Olaide_Daniel_301911975_docker-compose.yml up -d
+# =====================================================================
+# Topology
+#
+#        writes                      reads                      shards
+#   ┌──────────────┐          ┌──────────────┐           ┌──────────────┐
+#   │  pg-primary  │─ WAL ───▶│ pg-replica-1 │           │  pg-shard-a  │
+#   │   :55433     │          │   :55434     │           │   :55436     │
+#   │              │─ WAL ───▶│ pg-replica-2 │           │  pg-shard-b  │
+#   └──────────────┘          │   :55435     │           │   :55437     │
+#          │                  └──────────────┘           └──────▲───────┘
+#          └── postgres_fdw ──────────────────────────────────────┘
+#
+# replica-1 is SYNCHRONOUS (named in synchronous_standby_names), replica-2 is
+# ASYNCHRONOUS. That asymmetry is deliberate: it lets the same cluster
+# demonstrate both sides of the durability/latency trade-off in Portfolio 5.
+#
+# NOTE ON SECURITY: this is a laboratory cluster. Passwords are in plain text
+# and all nodes trust the compose network. A production deployment would use
+# TLS between nodes, secrets management, and restricted pg_hba rules.
+# =====================================================================
+
+name: mit8103-portfolio5
+
+services:
+  pg-primary:
+    image: postgres:18-alpine
+    container_name: mit8103-primary
+    environment:
+      POSTGRES_PASSWORD: mit8103
+      POSTGRES_DB: hdmb
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - wal_log_hints=on
+      - -c
+      - synchronous_standby_names=replica_1   # replica-2 stays asynchronous
+      - -c
+      - synchronous_commit=on
+      - -c
+      - log_min_duration_statement=500
+    ports: ["55433:5432"]
+    volumes:
+      # the cluster is built from the SAME Portfolio 1 schema and data, so the
+      # distributed exercise runs on the real HDMB ledger rather than a toy
+      - ../../portfolio-1-database-design/Olaide_Daniel_301911975_Schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+      - ../../portfolio-1-database-design/Olaide_Daniel_301911975_Constraints.sql:/docker-entrypoint-initdb.d/01-constraints.sql:ro
+      - ../../portfolio-1-database-design/Olaide_Daniel_301911975_Seed_Data.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./Olaide_Daniel_301911975_Primary_Init.sh:/docker-entrypoint-initdb.d/10-replication-setup.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hdmb"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  pg-replica-1:
+    image: postgres:18-alpine
+    container_name: mit8103-replica1
+    user: postgres
+    environment:
+      PGPASSWORD: replpass
+      REPLICATION_SLOT: replica_1
+      PRIMARY_HOST: pg-primary
+      APPLICATION_NAME: replica_1          # must match synchronous_standby_names
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    volumes:
+      - ./Olaide_Daniel_301911975_Replica_Entrypoint.sh:/replica-entrypoint.sh:ro
+    ports: ["55434:5432"]
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+
+  pg-replica-2:
+    image: postgres:18-alpine
+    container_name: mit8103-replica2
+    user: postgres
+    environment:
+      PGPASSWORD: replpass
+      REPLICATION_SLOT: replica_2
+      PRIMARY_HOST: pg-primary
+      APPLICATION_NAME: replica_2
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    volumes:
+      - ./Olaide_Daniel_301911975_Replica_Entrypoint.sh:/replica-entrypoint.sh:ro
+    ports: ["55435:5432"]
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+
+  # ---- shard nodes: they hold horizontal slices of ledger_entry ----
+  pg-shard-a:
+    image: postgres:18-alpine
+    container_name: mit8103-shard-a
+    environment:
+      POSTGRES_PASSWORD: mit8103
+      POSTGRES_DB: hdmb
+    volumes:
+      - ./Olaide_Daniel_301911975_Shard_Init.sql:/docker-entrypoint-initdb.d/00-shard.sql:ro
+    ports: ["55436:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hdmb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pg-shard-b:
+    image: postgres:18-alpine
+    container_name: mit8103-shard-b
+    environment:
+      POSTGRES_PASSWORD: mit8103
+      POSTGRES_DB: hdmb
+    volumes:
+      - ./Olaide_Daniel_301911975_Shard_Init.sql:/docker-entrypoint-initdb.d/00-shard.sql:ro
+    ports: ["55437:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hdmb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
