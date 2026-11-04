@@ -1,0 +1,211 @@
+MIT 8103 Portfolio 5 - replication, consistency and failover evidence
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:38:22 WAT
+Cluster : 1 primary + 2 streaming replicas + 2 shards (docker compose)
+
+======================================================================
+R1  TOPOLOGY - who is streaming what, and how far behind
+======================================================================
+ application_name |  client_addr  |   state   | sync_state |  sent_lsn  | replay_lsn | replay_behind |   replay_lag    
+------------------+---------------+-----------+------------+------------+------------+---------------+-----------------
+ replica_1        | 192.168.155.5 | streaming | async      | 0/23000000 | 0/23000000 | 0 bytes       | 00:00:00.000142
+ replica_2        | 192.168.155.6 | streaming | async      | 0/23000000 | 0/23000000 | 0 bytes       | 0
+(2 rows)
+
+# replication slots retaining WAL on the primary:
+ slot_name | slot_type | active | wal_retained 
+-----------+-----------+--------+--------------
+ replica_1 | physical  | t      | 0 bytes
+ replica_2 | physical  | t      | 0 bytes
+(2 rows)
+
+# each node's role:
+  mit8103-primary    in_recovery=f  ledger_rows=549590
+  mit8103-replica1   in_recovery=t  ledger_rows=549590
+  mit8103-replica2   in_recovery=t  ledger_rows=549590
+
+======================================================================
+R2  THE REPLICAS ARE READ-ONLY - enforced by the server, not by policy
+======================================================================
+# attempting a write on replica-1:
+ERROR:  cannot execute INSERT in a read-only transaction
+# a read on the same node, at the same moment:
+ branches_visible_on_replica 
+-----------------------------
+                          12
+(1 row)
+
+
+======================================================================
+R3  REPLICATION LAG UNDER A WRITE BURST (both standbys asynchronous)
+======================================================================
+# putting both standbys in asynchronous mode for this measurement:
+  synchronous_standby_names now = ''
+  sync_state reported by the primary:
+    replica_1 -> async
+    replica_2 -> async
+# 20,000 rows inserted on the primary, then lag sampled immediately:
+ application_name | sync_state | behind_bytes |    write_lag    |    flush_lag    |   replay_lag    
+------------------+------------+--------------+-----------------+-----------------+-----------------
+ replica_1        | async      | 0 bytes      | 00:00:00.01158  | 00:00:00.015103 | 00:00:00.045955
+ replica_2        | async      | 0 bytes      | 00:00:00.006911 | 00:00:00.013398 | 00:00:00.044845
+(2 rows)
+
+# rows visible on each node a moment later:
+  mit8103-primary    repl_probe_rows=20000
+  mit8103-replica1   repl_probe_rows=20000
+  mit8103-replica2   repl_probe_rows=20000
+# end-to-end visibility delay, measured from the row's own timestamp:
+replica-1 saw the last row 400 ms after it was written
+
+======================================================================
+R4  THE COST OF SYNCHRONOUS COMMIT - measured, not asserted
+======================================================================
+# (a) ASYNCHRONOUS: commit returns as soon as the primary's own WAL is
+#     flushed to disk. The standbys catch up afterwards.
+  synchronous_standby_names now = ''
+  sync_state reported by the primary:
+    replica_1 -> async
+    replica_2 -> async
+latency average = 1.640 ms
+tps = 609.827988 (without initial connection time)
+
+# (b) SYNCHRONOUS: every commit additionally waits for replica-1 to
+#     confirm it has flushed the same WAL.
+  synchronous_standby_names now = 'replica_1'
+  sync_state reported by the primary:
+    replica_1 -> sync
+    replica_2 -> async
+latency average = 2.114 ms
+tps = 473.028692 (without initial connection time)
+
+# (c) back to asynchronous, to confirm the difference was the setting
+#     and not drift in the machine's load:
+  synchronous_standby_names now = ''
+  sync_state reported by the primary:
+    replica_1 -> async
+    replica_2 -> async
+latency average = 2.703 ms
+tps = 369.967973 (without initial connection time)
+
+======================================================================
+R5  CAP, MADE CONCRETE - a synchronous standby that stops answering
+======================================================================
+# put replica-1 back into synchronous mode, and verify it took effect:
+  synchronous_standby_names now = 'replica_1'
+  sync_state reported by the primary:
+    replica_1 -> sync
+    replica_2 -> async
+# now stop that synchronous standby:
+  replica-1 stopped
+# attempt a write on the primary. It is launched in the background so
+# the lab can observe it while it is still pending:
+  after 5 seconds the INSERT has STILL not returned - it is blocked
+# what the blocked backend is waiting on, seen from another session:
+ pid | state  | wait_event_type | wait_event |                   query                    
+-----+--------+-----------------+------------+--------------------------------------------
+ 357 | active | IPC             | SyncRep    | INSERT INTO repl_probe (payload) VALUES ('
+(1 row)
+
+# NOTE: statement_timeout cannot interrupt this wait, which is why the
+# write is observed rather than timed out. The commit is already durable
+# on the primary; what is outstanding is the standby's acknowledgement,
+# and PostgreSQL will not abandon it - cancelling the client would leave
+# a commit that is locally durable but unacknowledged to the application.
+# Reads are completely unaffected:
+reads still served: 20900 probe rows
+#
+# OBSERVED: the write blocked while reads continued.
+# This is the CAP trade-off in one experiment. With its synchronous
+# standby unreachable, the cluster chose CONSISTENCY: rather than
+# acknowledge a write it could not replicate, it refused to
+# acknowledge the write at all. What was lost is write availability
+# specifically - the node is healthy and still serving reads.
+#
+# Choosing AVAILABILITY instead is one setting - and it silently accepts
+# acknowledging a write that exists on only one node:
+  synchronous_standby_names now = ''
+  sync_state reported by the primary:
+    replica_2 -> async
+# the moment the primary stops waiting, the pending commit returns:
+  previously blocked INSERT -> 
+# that write succeeded immediately, with replica-1 still down.
+# replica-1 restarted and caught up from its slot:
+ application_name |   state   | sync_state | behind  
+------------------+-----------+------------+---------
+ replica_1        | streaming | async      | 0 bytes
+ replica_2        | streaming | async      | 0 bytes
+(2 rows)
+
+
+======================================================================
+R6  FAILOVER - promoting a standby after the primary is lost
+======================================================================
+# position of each node immediately before the failure:
+ application_name | replay_lsn | behind_primary 
+------------------+------------+----------------
+ replica_1        | 0/2370BAC0 | 0 bytes
+ replica_2        | 0/2370BAC0 | 0 bytes
+(2 rows)
+
+  primary WAL position : 0/2370BAC0
+  probe rows on primary: 20902
+
+# >>> killing the primary <<<
+  primary stopped. Writes are now impossible anywhere: a standby cannot
+  promote itself, which is why production clusters run an external
+  failover manager (Patroni, repmgr, or a managed service's control plane).
+# replica-1 state while unpromoted:
+ still_a_standby | replayed_to 
+-----------------+-------------
+ t               | 0/2370BB38
+(1 row)
+
+# attempting a write on the unpromoted standby:
+ERROR:  cannot execute INSERT in a read-only transaction
+
+# >>> promoting replica-1 <<<
+t
+# replica-1 after promotion:
+ still_a_standby | now_generating_wal_at 
+-----------------+-----------------------
+ f               | 0/2370BBA8
+(1 row)
+
+# timeline history - a promotion increments the timeline, which is how
+# PostgreSQL prevents the old primary rejoining and causing split brain:
+/var/lib/postgresql/18/docker/pg_wal/00000002.history
+1	0/2370BB38	no recovery target specified
+# the new primary accepts writes:
+  id   
+-------
+ 20923
+(1 row)
+
+# data loss check - rows on the old primary vs the new one:
+  rows on old primary before the failure : 20902
+  rows surviving on the promoted node    : 20902
+  rows lost                              : 0
+# replica-2 is now orphaned: it still follows the OLD primary's timeline
+ still_a_standby |  stuck_at  
+-----------------+------------
+ t               | 0/2370BB38
+(1 row)
+
+#
+# Re-pointing replica-2 at the new primary requires pg_rewind or a fresh
+# basebackup. That work - not the promotion itself - is what makes manual
+# failover slow, and what a managed cloud database automates.
+
+======================================================================
+CLUSTER STATE AT END OF LAB
+======================================================================
+mit8103-replica1  Up 12 seconds
+mit8103-replica2  Up About a minute
+mit8103-shard-a  Up About a minute (healthy)
+mit8103-shard-b  Up About a minute (healthy)
+mit8103-redis  Up 27 minutes
+mit8103-mongo  Up 27 minutes
+mit8103-pg  Up About an hour
+
+# To reset: docker compose -f cluster/Olaide_Daniel_301911975_docker-compose.yml down -v && up -d

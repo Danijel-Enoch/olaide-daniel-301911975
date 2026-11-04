@@ -1,0 +1,33 @@
+MIT 8103 Portfolio 5 - cost of synchronous commit (repeated measures)
+Student : Olaide Daniel (301911975)
+Captured: 2026-11-05 23:42:10 WAT
+Design  : 6 alternating rounds of 500 single-row commits each,
+          mode switched and VERIFIED before every round.
+
+--- alternating rounds ---
+  round 1  async   state[replica_1=async replica_2=async]  latency   1.257 ms   tps 795.293137
+  round 2  sync    state[replica_1=sync replica_2=async]  latency   2.216 ms   tps 451.317712
+  round 3  async   state[replica_1=async replica_2=async]  latency   1.575 ms   tps 635.023851
+  round 4  sync    state[replica_1=sync replica_2=async]  latency   2.041 ms   tps 489.865659
+  round 5  async   state[replica_1=async replica_2=async]  latency   1.488 ms   tps 672.043914
+  round 6  sync    state[replica_1=sync replica_2=async]  latency   2.185 ms   tps 457.709475
+
+--- summary ---
+  ASYNCHRONOUS n=3  mean=1.440 ms  median=1.488 ms  min=1.257  max=1.575
+  SYNCHRONOUS  n=3  mean=2.147 ms  median=2.185 ms  min=2.041  max=2.216
+
+  mean difference         : +0.707 ms (+49.1%)
+  async spread (max-min)  : 0.318 ms
+  sync  spread (max-min)  : 0.175 ms
+
+  VERDICT: the two modes are separable - the mean difference exceeds
+  the run-to-run spread of the asynchronous baseline, so the cost is
+  attributable to the setting rather than to ambient load.
+
+--- what the primary reports now ---
+ application_name | sync_state 
+------------------+------------
+ replica_1        | async
+ replica_2        | async
+(2 rows)
+
