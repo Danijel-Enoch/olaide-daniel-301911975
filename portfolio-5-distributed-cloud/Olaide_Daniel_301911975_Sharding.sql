@@ -116,3 +116,29 @@ LIMIT 5;
 SELECT srvname AS server, srvoptions FROM pg_foreign_server ORDER BY srvname;
 SELECT ftrelid::regclass AS foreign_table, ftoptions FROM pg_foreign_table ORDER BY 1;
 
+\echo '=== 10. PREDICATE PUSHDOWN: now() is not pushed, a literal is ==='
+-- Step 6 shipped every row to the coordinator and filtered locally, because
+-- now() is a STABLE function that postgres_fdw will not send to a remote
+-- node (its value must be fixed by the coordinator's transaction). Computing
+-- the boundary first and passing a literal lets the WHERE clause travel with
+-- the query, so each shard filters its own rows and only matches cross the
+-- network. Same answer, far less traffic.
+SELECT (now() - INTERVAL '30 days')::timestamptz AS cutoff \gset
+EXPLAIN (ANALYZE, VERBOSE, COSTS OFF)
+SELECT direction, count(*) AS postings, sum(amount) AS total
+FROM ledger_distributed
+WHERE entry_ts >= :'cutoff'::timestamptz
+GROUP BY direction;
+
+\echo '=== 11. and the aggregate itself pushed down to each shard ==='
+-- With a pushdown-safe predicate the remote SQL can also carry the GROUP BY,
+-- so each shard returns a handful of aggregated rows instead of thousands of
+-- raw ones.
+EXPLAIN (ANALYZE, VERBOSE, COSTS OFF)
+SELECT * FROM (
+    SELECT direction, count(*) AS postings, sum(amount) AS total
+    FROM ledger_distributed_s0 WHERE entry_ts >= :'cutoff'::timestamptz GROUP BY direction
+    UNION ALL
+    SELECT direction, count(*), sum(amount)
+    FROM ledger_distributed_s1 WHERE entry_ts >= :'cutoff'::timestamptz GROUP BY direction
+) per_shard ORDER BY direction;
