@@ -16,9 +16,9 @@
 #          │                  └──────────────┘           └──────▲───────┘
 #          └── postgres_fdw ──────────────────────────────────────┘
 #
-# replica-1 is SYNCHRONOUS (named in synchronous_standby_names), replica-2 is
-# ASYNCHRONOUS. That asymmetry is deliberate: it lets the same cluster
-# demonstrate both sides of the durability/latency trade-off in Portfolio 5.
+# Both standbys start ASYNCHRONOUS. replica-1 is promoted to SYNCHRONOUS at
+# runtime by the replication test script, so the same cluster demonstrates
+# both sides of the durability/latency trade-off and the cost of each.
 #
 # NOTE ON SECURITY: this is a laboratory cluster. Passwords are in plain text
 # and all nodes trust the compose network. A production deployment would use
@@ -48,11 +48,15 @@ services:
       - -c
       - wal_log_hints=on
       - -c
-      - synchronous_standby_names=replica_1   # replica-2 stays asynchronous
-      - -c
       - synchronous_commit=on
       - -c
       - log_min_duration_statement=500
+      # synchronous_standby_names is deliberately NOT set here. Setting it at
+      # boot deadlocks the cluster: the primary blocks every COMMIT - including
+      # its own CREATE DATABASE during initialisation - waiting for a standby
+      # that cannot exist until the primary is up. It is switched on at
+      # runtime instead, in Olaide_Daniel_301911975_Replication_Tests.sql,
+      # which turns that trade-off into a measurement.
     ports: ["55433:5432"]
     volumes:
       # the cluster is built from the SAME Portfolio 1 schema and data, so the
