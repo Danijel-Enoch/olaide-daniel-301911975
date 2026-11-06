@@ -57,7 +57,17 @@ CREATE FOREIGN TABLE ledger_distributed_s1
     PARTITION OF ledger_distributed FOR VALUES WITH (MODULUS 2, REMAINDER 1)
     SERVER shard_b OPTIONS (schema_name 'public', table_name 'ledger_shard');
 
-\echo '=== 3. distribute 100,000 ledger entries across the shards ==='
+\echo '=== 3. clear any previous load from the shard nodes ==='
+-- DROP TABLE ledger_distributed CASCADE removes the foreign-table partitions
+-- but NOT the real tables they point at: those live on the shard nodes and
+-- survive. Re-running this script without clearing them fails with
+--   duplicate key value violates unique constraint "ledger_shard_pkey"
+-- TRUNCATE on a partitioned table with foreign partitions is propagated to
+-- the remote nodes by postgres_fdw, which makes the script re-runnable.
+TRUNCATE ledger_distributed;
+SELECT count(*) AS rows_on_shards_after_truncate FROM ledger_distributed;
+
+\echo '=== 4. distribute 100,000 ledger entries across the shards ==='
 \timing on
 INSERT INTO ledger_distributed (entry_id, txn_id, account_id, direction, amount, balance_after, entry_ts)
 SELECT entry_id, txn_id, account_id, direction, amount, balance_after, entry_ts
@@ -69,13 +79,13 @@ LIMIT 100000;
 ANALYZE ledger_distributed_s0;
 ANALYZE ledger_distributed_s1;
 
-\echo '=== 4. how the rows actually landed (hash distribution) ==='
+\echo '=== 5. how the rows actually landed (hash distribution) ==='
 SELECT tableoid::regclass AS shard, count(*) AS rows,
        count(DISTINCT account_id) AS distinct_accounts,
        to_char(sum(amount), 'FM999,999,999,990.00') AS value
 FROM ledger_distributed GROUP BY 1 ORDER BY 1;
 
-\echo '=== 5. SINGLE-SHARD query: the shard key is in the predicate ==='
+\echo '=== 6. SINGLE-SHARD query: the shard key is in the predicate ==='
 -- partition pruning should leave exactly ONE Foreign Scan in the plan
 EXPLAIN (ANALYZE, VERBOSE, COSTS OFF)
 SELECT entry_id, direction, amount, balance_after, entry_ts
@@ -84,21 +94,21 @@ WHERE account_id = 4211
 ORDER BY entry_ts DESC
 LIMIT 10;
 
-\echo '=== 6. CROSS-SHARD aggregate: no shard key, both nodes scanned ==='
+\echo '=== 7. CROSS-SHARD aggregate: no shard key, both nodes scanned ==='
 EXPLAIN (ANALYZE, VERBOSE, COSTS OFF)
 SELECT direction, count(*) AS postings, sum(amount) AS total
 FROM ledger_distributed
 WHERE entry_ts >= now() - INTERVAL '30 days'
 GROUP BY direction;
 
-\echo '=== 7. the result of that cross-shard aggregate ==='
+\echo '=== 8. the result of that cross-shard aggregate ==='
 SELECT direction, count(*) AS postings,
        to_char(sum(amount), 'FM999,999,999,990.00') AS total
 FROM ledger_distributed
 WHERE entry_ts >= now() - INTERVAL '30 days'
 GROUP BY direction ORDER BY direction;
 
-\echo '=== 8. THE LIMITATION: a join between sharded and local data ==='
+\echo '=== 9. THE LIMITATION: a join between sharded and local data ==='
 -- account lives only on the coordinator; ledger_distributed lives on the
 -- shards. The join cannot be pushed down to either shard, so rows must be
 -- shipped back and joined centrally. This is the cost of sharding, and it is
@@ -112,12 +122,12 @@ GROUP BY a.account_number
 ORDER BY total DESC
 LIMIT 5;
 
-\echo '=== 9. where each node thinks its data is ==='
+\echo '=== 10. where each node thinks its data is ==='
 SELECT srvname AS server, srvoptions FROM pg_foreign_server ORDER BY srvname;
 SELECT ftrelid::regclass AS foreign_table, ftoptions FROM pg_foreign_table ORDER BY 1;
 
-\echo '=== 10. PREDICATE PUSHDOWN: now() is not pushed, a literal is ==='
--- Step 6 shipped every row to the coordinator and filtered locally, because
+\echo '=== 11. PREDICATE PUSHDOWN: now() is not pushed, a literal is ==='
+-- Step 7 shipped every row to the coordinator and filtered locally, because
 -- now() is a STABLE function that postgres_fdw will not send to a remote
 -- node (its value must be fixed by the coordinator's transaction). Computing
 -- the boundary first and passing a literal lets the WHERE clause travel with
@@ -130,7 +140,7 @@ FROM ledger_distributed
 WHERE entry_ts >= :'cutoff'::timestamptz
 GROUP BY direction;
 
-\echo '=== 11. and the aggregate itself pushed down to each shard ==='
+\echo '=== 12. and the aggregate itself pushed down to each shard ==='
 -- With a pushdown-safe predicate the remote SQL can also carry the GROUP BY,
 -- so each shard returns a handful of aggregated rows instead of thousands of
 -- raw ones.
