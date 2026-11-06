@@ -179,10 +179,10 @@ schema: one primary, two streaming replicas, two shard nodes.
   which is the work that makes manual failover slow.
 * **Sharding:** `ledger_distributed` is hash-partitioned on `account_id` across
   two nodes via `postgres_fdw`. A query carrying the shard key prunes to **one**
-  Foreign Scan (0.681 ms); one without it scans both asynchronously (123.967 ms).
-  A predicate using `now()` was **not pushed down** — 41,411 rows were shipped
+  Foreign Scan (0.541 ms); one without it scans both asynchronously (124.084 ms).
+  A predicate using `now()` was **not pushed down** — 41,448 rows were shipped
   and discarded — and replacing it with a literal cut the same query to
-  **3.394 ms**, a 36× improvement from pushdown alone.
+  **5.069 ms**, a 24× improvement from pushdown alone.
 * **Cloud:** a mapping onto managed PostgreSQL (Multi-AZ + read replica), with
   indicative costs, what a managed service does better, what it does not solve,
   and the conclusion that **HDMB does not need sharding yet** — 550,000 rows

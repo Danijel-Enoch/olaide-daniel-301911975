@@ -46,7 +46,7 @@ Baseline plan fragment (`Olaide_Daniel_301911975_baseline_Plans.txt`):
 ```
 ->  Parallel Seq Scan on ledger_entry le
       Filter: (account_id = 4211)
-      Rows Removed by Filter: 183196
+      Rows Removed by Filter: 183188
 ```
 
 The database read **549,590 rows to return 20**. `Rows Removed by Filter` is the

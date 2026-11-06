@@ -190,8 +190,12 @@ through `postgres_fdw`. The shard key was chosen because every query that must
 stay fast carries it; sharding by branch would have put most of the bank in
 Lagos, and sharding by date would have sent every write to one shard.
 
-100,000 entries loaded in **1.074 s** (`batch_size '1000'` on the foreign
-servers — without batching, remote inserts go one row at a time):
+100,000 entries loaded in **1.261 s** (`batch_size '1000'` on the foreign
+servers — without batching, remote inserts go one row at a time). The script
+`TRUNCATE`s first, which postgres_fdw propagates to the shard nodes: dropping
+`ledger_distributed` removes the foreign-table *partitions* but not the real
+tables they point at, so without the truncate a second run fails with
+`duplicate key value violates unique constraint "ledger_shard_pkey"`.
 
 | Shard | Rows | Distinct accounts | Value |
 |---|---|---|---|
@@ -206,8 +210,8 @@ planning has to look at rows per shard rather than keys per shard.
 
 | Query | Plan | Time |
 |---|---|---|
-| `WHERE account_id = 4211` (shard key present) | **one** `Foreign Scan`, predicate pushed as `WHERE ((account_id = 4211))` | **0.681 ms** |
-| 30-day aggregate, no shard key | `Append` over **two** `Async Foreign Scan`s | 123.967 ms |
+| `WHERE account_id = 4211` (shard key present) | **one** `Foreign Scan`, predicate pushed as `WHERE ((account_id = 4211))` | **0.541 ms** |
+| 30-day aggregate, no shard key | `Append` over **two** `Async Foreign Scan`s | 124.084 ms |
 
 Partition pruning removed the other shard from the plan entirely — the
 coordinator did not contact it at all. The cross-shard query used PostgreSQL
@@ -223,12 +227,12 @@ The 30-day aggregate above produced this remote SQL:
 ```
 Remote SQL: SELECT direction, amount, entry_ts FROM public.ledger_shard
 Filter: (entry_ts >= (now() - '30 days'::interval))
-Rows Removed by Filter: 41411
+Rows Removed by Filter: 41448
 ```
 
 **No `WHERE` clause reached the shard.** `now()` is a `STABLE` function whose
 value must be fixed by the coordinator's transaction, so `postgres_fdw` will not
-send it. Every row was shipped across the network and 41,411 of 43,428 were
+send it. Every row was shipped across the network and 41,448 of 43,428 were
 discarded locally — 95% waste.
 
 Computing the boundary first and passing a literal fixes it:
@@ -240,12 +244,12 @@ Remote SQL: SELECT direction, amount FROM public.ledger_shard
 
 | Same query | Time |
 |---|---|
-| With `now()` in the predicate | 123.967 ms |
-| With a literal timestamp | **3.394 ms** |
+| With `now()` in the predicate | 124.084 ms |
+| With a literal timestamp | **5.069 ms** |
 
-**A 36× improvement from pushdown alone**, with no change to indexes, hardware
+**A 24× improvement from pushdown alone**, with no change to indexes, hardware
 or data. And with a pushdown-safe predicate the **aggregate** pushes down too
-(S2 step 11): each shard returns 2 aggregated rows instead of ~2,000 raw ones.
+(S2 step 12): each shard returns 2 aggregated rows instead of ~2,000 raw ones.
 
 ### A join across the shard boundary cannot be pushed down at all
 
@@ -260,7 +264,7 @@ Hash Join
   ->  Hash  ->  Seq Scan on hdmb.account  (24,807 rows)
 ```
 
-110.514 ms, and it would scale with the data shipped rather than with the answer
+118.875 ms, and it would scale with the data shipped rather than with the answer
 returned. This is the real price of sharding: **the shard key must match the
 access pattern, because queries that cross it cost network round trips instead
 of index lookups.** A query by account is one shard; a query by date or by
@@ -312,3 +316,9 @@ leaves the cluster on a new timeline, so re-running anything afterwards needs
 * **Sharding is one-way here.** `ledger_distributed` is populated by a bulk
   `INSERT … SELECT`; there is no dual-write, no rebalancing and no resharding,
   all of which a production sharded system needs.
+* **The script was not re-runnable at first.** `DROP TABLE … CASCADE` removes
+  the foreign-table partitions but leaves the real tables on the shard nodes
+  populated, so a second run failed on the shard primary key. Caught by auditing
+  the captured evidence against the write-up — the committed evidence contained
+  a failed load step while the prose quoted an earlier successful run. Fixed with
+  a propagated `TRUNCATE`, and all figures above are from the clean re-run.
