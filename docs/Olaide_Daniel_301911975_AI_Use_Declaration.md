@@ -51,6 +51,7 @@ because the failures are themselves instructive:
 | `ALTER SYSTEM` sent in a multi-statement `psql -c` string | Silent failure: the replication lab "measured" synchronous commit that had never been enabled, and reported *lower* latency for sync than async | Mode now set with separate `-c` commands and **verified** via `SHOW` and `pg_stat_replication` before any measurement; an A-B-A measurement added (Portfolio 5 §3) |
 | `synchronous_standby_names` set at container boot | The primary deadlocked on its own `CREATE DATABASE` during initialisation | Setting moved to a runtime experiment; the failure is documented as evidence of the trade-off |
 | `statement_timeout` expected to interrupt a synchronous-replication wait | The write hung instead of timing out | Experiment redesigned to *observe* the blocked backend's `wait_event = 'SyncRep'`, which is stronger evidence |
+| Sharding script not re-runnable: `DROP TABLE … CASCADE` removes the foreign-table partitions but leaves the real tables populated on the shard nodes | A final audit of every quoted figure against its committed evidence file found the committed sharding evidence contained `duplicate key value violates unique constraint "ledger_shard_pkey"` on the load step, while the write-up quoted an earlier successful run | Added a `TRUNCATE` that postgres_fdw propagates to the shard nodes, re-ran the exercise cleanly, and corrected every affected figure in the write-ups (the pushdown gain is 24×, not the 36× quoted from the earlier run) |
 
 Two further verification habits were applied throughout:
 
@@ -63,6 +64,12 @@ Two further verification habits were applied throughout:
 2. **Conclusions are derived from captured output.** Portfolio 5's CAP section
    branches on whether the write actually blocked, so the write-up cannot
    contradict its own evidence.
+3. **Every quoted figure was checked against its evidence file** in a final
+   audit pass, mechanically rather than by eye. It compared each number in the
+   READMEs with the committed `evidence/` output and found two mismatches — a
+   row count quoted from a superseded run, and the sharding evidence described
+   above. Both were corrected at the source rather than in the prose. A claim
+   that cannot be located in a captured file is not a claim I am making.
 
 ## 5. Responsibility
 
